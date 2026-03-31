@@ -3,6 +3,7 @@ package it.unibz.inf.ontop.dbschema.impl;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import it.unibz.inf.ontop.dbschema.DatabaseInfoSupplier;
+import it.unibz.inf.ontop.injection.OntopModelSettings;
 
 import javax.annotation.Nullable;
 import java.util.Optional;
@@ -10,8 +11,11 @@ import java.util.Optional;
 @Singleton
 public class DatabaseInfoSupplierImpl implements DatabaseInfoSupplier {
 
+    private final OntopModelSettings settings;
+
     @Inject
-    protected DatabaseInfoSupplierImpl() {
+    protected DatabaseInfoSupplierImpl(OntopModelSettings settings) {
+        this.settings = settings;
     }
 
     @Nullable
@@ -29,5 +33,12 @@ public class DatabaseInfoSupplierImpl implements DatabaseInfoSupplier {
         // program) the database version setter may be called twice.
         if (this.dbVersion == null)
             this.dbVersion = version;
+    }
+
+    @Override
+    public boolean isIncludeCharacterSetUtf8() {
+        return settings.getProperty(OntopModelSettings.INCLUDE_MYSQL_CHARSET_UTF8)
+                .map(Boolean::parseBoolean)
+                .orElse(true);
     }
 }
