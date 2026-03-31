@@ -3,6 +3,7 @@ package it.unibz.inf.ontop.model.type.impl;
 import com.google.common.collect.ImmutableMap;
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
+import it.unibz.inf.ontop.dbschema.DatabaseInfoSupplier;
 import it.unibz.inf.ontop.model.type.*;
 import it.unibz.inf.ontop.model.vocabulary.XSD;
 
@@ -33,12 +34,18 @@ public class MySQLDBTypeFactory extends DefaultSQLDBTypeFactory {
     public static final String DATETIME_STR = "DATETIME";
 
     public static final String JSON_STR = "JSON";
+
+    private final boolean includeCharSetUtf8;
+
     @AssistedInject
-    protected MySQLDBTypeFactory(@Assisted TermType rootTermType, @Assisted TypeFactory typeFactory) {
-        super(createMySQLTypeMap(rootTermType, typeFactory), createMySQLCodeMap());
+    protected MySQLDBTypeFactory(@Assisted TermType rootTermType, @Assisted TypeFactory typeFactory,
+                                 DatabaseInfoSupplier databaseInfoSupplier) {
+        super(createMySQLTypeMap(rootTermType, typeFactory, databaseInfoSupplier), createMySQLCodeMap());
+        this.includeCharSetUtf8 = databaseInfoSupplier.isIncludeCharacterSetUtf8();
     }
 
-    protected static Map<String, DBTermType> createMySQLTypeMap(TermType rootTermType, TypeFactory typeFactory) {
+    protected static Map<String, DBTermType> createMySQLTypeMap(TermType rootTermType, TypeFactory typeFactory,
+                                                                 DatabaseInfoSupplier databaseInfoSupplier) {
         TermTypeAncestry rootAncestry = rootTermType.getAncestry();
         RDFDatatype xsdInteger = typeFactory.getXsdIntegerDatatype();
 
@@ -46,7 +53,9 @@ public class MySQLDBTypeFactory extends DefaultSQLDBTypeFactory {
         NumberDBTermType bigIntType = new NumberDBTermType(BIGINT_STR, "SIGNED", rootAncestry, xsdInteger, INTEGER);
 
         // Overloads NVARCHAR to insert the precision
-        StringDBTermType textType = new StringDBTermType(TEXT_STR, "CHAR CHARACTER SET utf8", rootAncestry,
+        String charCastName = databaseInfoSupplier.isIncludeCharacterSetUtf8()
+                ? "CHAR CHARACTER SET utf8" : "CHAR";
+        StringDBTermType textType = new StringDBTermType(TEXT_STR, charCastName, rootAncestry,
                 typeFactory.getXsdStringDatatype());
 
         // Overloads DECIMAL to specify a precision for casting purposes

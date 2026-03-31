@@ -13,4 +13,12 @@ public interface DatabaseInfoSupplier {
      * Can only be set once
      */
     void setDatabaseVersion(String version) throws IllegalStateException;
+
+    /**
+     * MySQL-specific flag for CAST to CHAR with CHARACTER SET utf8.
+     * Default is true for backward compatibility.
+     */
+    default boolean isIncludeCharacterSetUtf8() {
+        return true;
+    }
 }
