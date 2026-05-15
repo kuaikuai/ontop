@@ -209,8 +209,8 @@ public class MySQLDBFunctionSymbolFactory extends AbstractSQLDBFunctionSymbolFac
                                            ImmutableList<? extends ImmutableTerm> terms,
                                            Function<ImmutableTerm, String> termConverter) {
 
-        String charType = databaseInfoSupplier.isIncludeCharacterSetUtf8()
-                ? "CHAR(30) CHARACTER SET utf8" : "CHAR(30)";
+        String charType = databaseInfoSupplier.isDoris()
+                ? "CHAR(30)" : "CHAR(30) CHARACTER SET utf8";
         String dateTimeStringWithoutTz = String.format("REPLACE(CAST(%s AS " + charType + "),' ', 'T')",
                 termConverter.apply(terms.get(0)));
 

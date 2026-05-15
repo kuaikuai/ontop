@@ -15,10 +15,11 @@ public interface DatabaseInfoSupplier {
     void setDatabaseVersion(String version) throws IllegalStateException;
 
     /**
-     * MySQL-specific flag for CAST to CHAR with CHARACTER SET utf8.
-     * Default is true for backward compatibility.
+     * MySQL-compatible Doris mode flag.
+     * When true, generates Doris-compatible SQL instead of MySQL-specific SQL.
+     * Default is false.
      */
-    default boolean isIncludeCharacterSetUtf8() {
-        return true;
+    default boolean isDoris() {
+        return false;
     }
 }

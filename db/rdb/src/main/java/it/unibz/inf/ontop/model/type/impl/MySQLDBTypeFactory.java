@@ -35,13 +35,13 @@ public class MySQLDBTypeFactory extends DefaultSQLDBTypeFactory {
 
     public static final String JSON_STR = "JSON";
 
-    private final boolean includeCharSetUtf8;
+    private final boolean isDoris;
 
     @AssistedInject
     protected MySQLDBTypeFactory(@Assisted TermType rootTermType, @Assisted TypeFactory typeFactory,
                                  DatabaseInfoSupplier databaseInfoSupplier) {
         super(createMySQLTypeMap(rootTermType, typeFactory, databaseInfoSupplier), createMySQLCodeMap());
-        this.includeCharSetUtf8 = databaseInfoSupplier.isIncludeCharacterSetUtf8();
+        this.isDoris = databaseInfoSupplier.isDoris();
     }
 
     protected static Map<String, DBTermType> createMySQLTypeMap(TermType rootTermType, TypeFactory typeFactory,
@@ -49,12 +49,13 @@ public class MySQLDBTypeFactory extends DefaultSQLDBTypeFactory {
         TermTypeAncestry rootAncestry = rootTermType.getAncestry();
         RDFDatatype xsdInteger = typeFactory.getXsdIntegerDatatype();
 
-        // Overloads BIGINT to use SIGNED for casting purposes
-        NumberDBTermType bigIntType = new NumberDBTermType(BIGINT_STR, "SIGNED", rootAncestry, xsdInteger, INTEGER);
+        // Overloads BIGINT to use BIGINT for Doris or SIGNED for MySQL
+        String bigIntCastName = databaseInfoSupplier.isDoris() ? "BIGINT" : "SIGNED";
+        NumberDBTermType bigIntType = new NumberDBTermType(BIGINT_STR, bigIntCastName, rootAncestry, xsdInteger, INTEGER);
 
         // Overloads NVARCHAR to insert the precision
-        String charCastName = databaseInfoSupplier.isIncludeCharacterSetUtf8()
-                ? "CHAR CHARACTER SET utf8" : "CHAR";
+        String charCastName = databaseInfoSupplier.isDoris()
+                ? "CHAR" : "CHAR CHARACTER SET utf8";
         StringDBTermType textType = new StringDBTermType(TEXT_STR, charCastName, rootAncestry,
                 typeFactory.getXsdStringDatatype());
 

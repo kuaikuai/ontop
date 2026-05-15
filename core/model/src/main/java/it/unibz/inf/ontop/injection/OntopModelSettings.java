@@ -56,5 +56,5 @@ public interface OntopModelSettings {
     String DISABLE_LIMIT_OPTIMIZATION = "ontop.disableLimitOptimization";
     String AUTHORIZATION = "ontop.authorization";
 
-    String INCLUDE_MYSQL_CHARSET_UTF8 = "ontop.mysql.includeCharacterSetUtf8";
+    String INCLUDE_MYSQL_DORIS = "ontop.mysql.doris";
 }

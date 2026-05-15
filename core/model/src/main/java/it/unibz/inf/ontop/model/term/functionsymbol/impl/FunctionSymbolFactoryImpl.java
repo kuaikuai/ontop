@@ -335,6 +335,11 @@ public class FunctionSymbolFactoryImpl implements FunctionSymbolFactory {
                 new GeofRelateMFunctionSymbolImpl(GEOF.RELATEM, wktLiteral, xsdString),
 
                 /*
+                 * Vector Similarity Functions (Apache Doris)
+                 */
+                new L2DistApproxSPARQLFunctionSymbolImpl(VectorFN.L2_DIST_APPROX, xsdString, xsdDouble),
+
+                /*
                  * Time extension - duration arithmetic
                  */
                 new OfnMultitypedInputBinarySPARQLFunctionSymbolImpl("OFN_WEEKS_BETWEEN", OFN.WEEKS_BETWEEN,

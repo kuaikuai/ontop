@@ -36,9 +36,9 @@ public class DatabaseInfoSupplierImpl implements DatabaseInfoSupplier {
     }
 
     @Override
-    public boolean isIncludeCharacterSetUtf8() {
-        return settings.getProperty(OntopModelSettings.INCLUDE_MYSQL_CHARSET_UTF8)
+    public boolean isDoris() {
+        return settings.getProperty(OntopModelSettings.INCLUDE_MYSQL_DORIS)
                 .map(Boolean::parseBoolean)
-                .orElse(true);
+                .orElse(false);
     }
 }

@@ -11,6 +11,7 @@ import it.unibz.inf.ontop.model.term.functionsymbol.InequalityLabel;
 import it.unibz.inf.ontop.model.term.functionsymbol.db.*;
 import it.unibz.inf.ontop.model.type.*;
 import it.unibz.inf.ontop.model.type.impl.DatetimeDBTermType;
+import it.unibz.inf.ontop.model.term.functionsymbol.db.impl.SimpleTypedDBFunctionSymbolImpl;
 import it.unibz.inf.ontop.utils.Interval;
 
 import java.util.Map;
@@ -93,6 +94,9 @@ public abstract class AbstractSQLDBFunctionSymbolFactory extends AbstractDBFunct
     private static final String ST_UNION = "ST_UNION";
     private static final String ST_RELATE = "ST_RELATE";
     private static final String ST_SRID = "ST_SRID";
+
+    // --- Vector Similarity Functions (Apache Doris) ---
+    private static final String L2_DISTANCE_APPROXIMATE_STR = "L2_DISTANCE_APPROXIMATE";
 
     protected final DBTypeFactory dbTypeFactory;
     protected final TypeFactory typeFactory;
@@ -402,6 +406,33 @@ public abstract class AbstractSQLDBFunctionSymbolFactory extends AbstractDBFunct
         DBFunctionSymbol makepointSymbol = new GeoDBTypedFunctionSymbol(ST_MAKEPOINT, 2, dbGeometryType, false,
                 abstractRootDBType);
         builder.put(ST_MAKEPOINT, 2, makepointSymbol);
+
+        /*
+         * Vector Similarity Functions (Apache Doris)
+         */
+        DBFunctionSymbol l2DistApproxFunctionSymbol = new SimpleTypedDBFunctionSymbolImpl(
+                L2_DISTANCE_APPROXIMATE_STR, 2, dbDoubleType, false, abstractRootDBType,
+                (terms, termConverter, termFactory) -> {
+                    String colSql = termConverter.apply(terms.get(0));
+                    String vecRaw;
+
+                    // Extract raw vector string from DBConstant
+                    if ((terms.get(1) instanceof DBConstant)) {
+                        vecRaw = ((DBConstant) terms.get(1)).getValue();
+                    } else {
+                        // Fallback: strip SQL string quotes
+                        vecRaw = termConverter.apply(terms.get(1))
+                                .replaceAll("^'|'$", "");
+                    }
+
+                    // Remove surrounding brackets if present from the string literal
+                    String vecInner = vecRaw.replaceAll("^\\[|\\]$", "");
+
+                    // Generate valid Doris SQL: l2_distance_approximate(col, ARRAY[0.1,0.2,0.3])
+                    return String.format("%s(%s, ARRAY[%s])",
+                            L2_DISTANCE_APPROXIMATE_STR, colSql, vecInner);
+                });
+        builder.put(L2_DISTANCE_APPROXIMATE_STR, 2, l2DistApproxFunctionSymbol);
 
         DBFunctionSymbol ontopUserSymbol = new OntopUserFunctionSymbolImpl(dbBooleanType);
         builder.put(OntopUserFunctionSymbolImpl.ONTOP_USER, 0, ontopUserSymbol);
