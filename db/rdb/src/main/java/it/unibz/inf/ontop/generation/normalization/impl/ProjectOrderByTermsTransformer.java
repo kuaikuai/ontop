@@ -9,10 +9,7 @@ import it.unibz.inf.ontop.iq.impl.IQTreeTools;
 import it.unibz.inf.ontop.iq.node.*;
 import it.unibz.inf.ontop.iq.request.FunctionalDependencies;
 import it.unibz.inf.ontop.iq.visit.impl.DefaultRecursiveIQTreeVisitingTransformerWithVariableGenerator;
-import it.unibz.inf.ontop.model.term.ImmutableFunctionalTerm;
-import it.unibz.inf.ontop.model.term.ImmutableTerm;
-import it.unibz.inf.ontop.model.term.NonGroundTerm;
-import it.unibz.inf.ontop.model.term.Variable;
+import it.unibz.inf.ontop.model.term.*;
 import it.unibz.inf.ontop.model.term.functionsymbol.db.NonDeterministicDBFunctionSymbol;
 import it.unibz.inf.ontop.substitution.Substitution;
 import it.unibz.inf.ontop.substitution.SubstitutionFactory;
@@ -104,10 +101,24 @@ import static it.unibz.inf.ontop.iq.impl.UnaryIQTreeTools.UnaryIQTreeDecompositi
         var substitution = optionalConstruction.map(ConstructionNode::getSubstitution)
                 .orElseGet(substitutionFactory::getSubstitution);
 
-        ImmutableSet<ImmutableTerm> alreadyDefinedTerms = Sets.union(
-                        projectedVariables,
-                        substitution.getRangeSet())
-                .immutableCopy();
+        // Also include all descendant tree variables and DB lexical terms from
+        // substitution range set, so that ORDER BY terms simplified by OrderBySimplifier
+        // (e.g., CAST expressions using DB column variables) can be recognized as
+        // already projected.
+        ImmutableSet<Variable> allDescendantVars = newDescendantTree.getVariables();
+
+        // Extract all leaf variables from ORDER BY comparators
+        ImmutableSet<Variable> orderBySubVars = orderBy.getComparators().stream()
+                .map(OrderByNode.OrderComparator::getTerm)
+                .flatMap(t -> extractVariables(t).stream())
+                .filter(allDescendantVars::contains)
+                .collect(ImmutableCollectors.toSet());
+
+        ImmutableSet<ImmutableTerm> alreadyDefinedTerms = ImmutableSet.<ImmutableTerm>builder()
+                .addAll(projectedVariables)
+                .addAll(substitution.getRangeSet())
+                .addAll(orderBySubVars)
+                .build();
 
         ImmutableMap<Variable, NonGroundTerm> newBindings = orderBy.getComparators().stream()
                 .map(OrderByNode.OrderComparator::getTerm)
@@ -165,5 +176,22 @@ import static it.unibz.inf.ontop.iq.impl.UnaryIQTreeTools.UnaryIQTreeDecompositi
         // Constant
         else
             return false;
+    }
+
+    /**
+     * Recursively extracts all Variable leaf nodes from a term.
+     */
+    private static ImmutableSet<Variable> extractVariables(ImmutableTerm term) {
+        if (term instanceof Variable) {
+            return ImmutableSet.of((Variable) term);
+        }
+        else if (term instanceof ImmutableFunctionalTerm) {
+            return ((ImmutableFunctionalTerm) term).getTerms().stream()
+                    .flatMap(t -> extractVariables(t).stream())
+                    .collect(ImmutableCollectors.toSet());
+        }
+        else {
+            return ImmutableSet.of();
+        }
     }
 }
