@@ -12,6 +12,10 @@ import java.sql.SQLException;
 
 public class MySQLDBMetadataProvider extends DefaultSchemaDBMetadataProvider {
 
+    // True when ontop.mysql.doris=true: Doris JDBC returns extra catalog/schema
+    // in getIndexInfo vs getColumns, requiring table-only ID comparison.
+    private final boolean isDoris;
+
     @AssistedInject
     MySQLDBMetadataProvider(@Assisted Connection connection, CoreSingletons coreSingletons) throws MetadataExtractionException {
         super(connection,
@@ -22,6 +26,18 @@ public class MySQLDBMetadataProvider extends DefaultSchemaDBMetadataProvider {
                 c -> new String[] { c.getCatalog(), "DUMMY" });
         //        "SELECT DATABASE() AS TABLE_SCHEM");
         // https://dev.mysql.com/doc/refman/5.7/en/information-functions.html#function_schema
+        this.isDoris = coreSingletons.getDatabaseInfoSupplier().isDoris();
+    }
+
+    @Override
+    protected boolean equalRelationIDs(RelationID extractedId, RelationID givenId) {
+        // Doris JDBC returns catalog + schema in getIndexInfo (e.g. dwd.dwd.test_items)
+        // while getColumns returns only schema + table (e.g. dwd.test_items).
+        // Compare only table names to bypass this inconsistency.
+        if (isDoris) {
+            return extractedId.getTableOnlyID().equals(givenId.getTableOnlyID());
+        }
+        return super.equalRelationIDs(extractedId, givenId);
     }
 
 
