@@ -27,6 +27,7 @@ public class GeneralStructuralAndSemanticIQOptimizerImpl implements GeneralStruc
     private final DisjunctionOfEqualitiesMergingSimplifier disjunctionOfEqualitiesMergingSimplifier;
     private final AuthorizationFunctionEvaluator authorizationFunctionEvaluator;
     private final AllQueryContextFunctionSymbolEvaluator allQueryContextFunctionSymbolEvaluator;
+    private final SameSourceMergeOptimizer sameSourceMergeOptimizer;
 
     @Inject
     private GeneralStructuralAndSemanticIQOptimizerImpl(UnionAndBindingLiftOptimizer bindingLiftOptimizer,
@@ -38,8 +39,9 @@ public class GeneralStructuralAndSemanticIQOptimizerImpl implements GeneralStruc
                                                         FlattenLifter flattenLifter,
                                                         PreventDistinctOptimizer preventDistinctOptimizer,
                                                         DisjunctionOfEqualitiesMergingSimplifier disjunctionOfEqualitiesMergingSimplifier,
-                                                        AuthorizationFunctionEvaluator authorizationFunctionEvaluator,
-                                                        AllQueryContextFunctionSymbolEvaluator allQueryContextFunctionSymbolEvaluator) {
+                                                         AuthorizationFunctionEvaluator authorizationFunctionEvaluator,
+                                                         AllQueryContextFunctionSymbolEvaluator allQueryContextFunctionSymbolEvaluator,
+                                                         SameSourceMergeOptimizer sameSourceMergeOptimizer) {
         this.bindingLiftOptimizer = bindingLiftOptimizer;
         this.joinLikeOptimizer = joinLikeOptimizer;
         this.orderBySimplifier = orderBySimplifier;
@@ -51,6 +53,7 @@ public class GeneralStructuralAndSemanticIQOptimizerImpl implements GeneralStruc
         this.disjunctionOfEqualitiesMergingSimplifier = disjunctionOfEqualitiesMergingSimplifier;
         this.authorizationFunctionEvaluator = authorizationFunctionEvaluator;
         this.allQueryContextFunctionSymbolEvaluator = allQueryContextFunctionSymbolEvaluator;
+        this.sameSourceMergeOptimizer = sameSourceMergeOptimizer;
     }
 
     @Override
@@ -73,6 +76,9 @@ public class GeneralStructuralAndSemanticIQOptimizerImpl implements GeneralStruc
                         System.currentTimeMillis() - beginningAuthorizationEvaluation,
                         current);
             }
+
+            current = sameSourceMergeOptimizer.optimize(current);
+            LOGGER.debug("New query after same-source node merging:\n{}\n", current);
 
             long beginningJoinLike = System.currentTimeMillis();
             current = joinLikeOptimizer.optimize(current);
