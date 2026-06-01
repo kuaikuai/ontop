@@ -48,11 +48,12 @@ public class SameSourceMergeOptimizerTest {
         UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
 
         IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+        int inputNodeCount = countExtensionalNodes(initialQuery.getTree());
+        assertEquals("Input should have 2 ExtensionalDataNodes", 2, inputNodeCount);
 
-        // After Task 5 implementation, merge should produce a single ExtensionalDataNode
-        // TODO: enable optimizer call after Task 5
-        int nodeCount = countExtensionalNodes(initialQuery.getTree());
-        assertEquals("Input should have 2 ExtensionalDataNodes", 2, nodeCount);
+        IQ mergedQuery = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        int outputNodeCount = countExtensionalNodes(mergedQuery.getTree());
+        assertEquals("Merge should produce 1 ExtensionalDataNode", 1, outputNodeCount);
     }
 
     private static int countExtensionalNodes(IQTree tree) {

@@ -12,6 +12,7 @@ import it.unibz.inf.ontop.injection.*;
 import it.unibz.inf.ontop.iq.impl.IQTreeTools;
 import it.unibz.inf.ontop.iq.node.ExtensionalDataNode;
 import it.unibz.inf.ontop.iq.optimizer.*;
+import it.unibz.inf.ontop.iq.optimizer.impl.SameSourceMergeOptimizer;
 import it.unibz.inf.ontop.iq.tools.UnionBasedQueryMerger;
 import it.unibz.inf.ontop.iq.transform.QueryRenamer;
 import it.unibz.inf.ontop.iq.transformer.BooleanExpressionPushDownTransformer;
@@ -51,6 +52,7 @@ public class OptimizationTestingTools {
     public static final Constant NULL;
     public static final UnionAndBindingLiftOptimizer UNION_AND_BINDING_LIFT_OPTIMIZER;
     public static final GeneralStructuralAndSemanticIQOptimizer GENERAL_STRUCTURAL_AND_SEMANTIC_IQ_OPTIMIZER;
+    public static final SameSourceMergeOptimizer SAME_SOURCE_MERGE_OPTIMIZER;
     public static final UnionBasedQueryMerger UNION_BASED_QUERY_MERGER;
     public static final FlattenLifter FLATTEN_LIFTER;
     public static final RDF RDF_FACTORY;
@@ -133,6 +135,7 @@ public class OptimizationTestingTools {
         QUERY_RENAMER = injector.getInstance(QueryRenamer.class);
         CORE_SINGLETONS = injector.getInstance(CoreSingletons.class);
         GENERAL_STRUCTURAL_AND_SEMANTIC_IQ_OPTIMIZER = injector.getInstance(GeneralStructuralAndSemanticIQOptimizer.class);
+        SAME_SOURCE_MERGE_OPTIMIZER = injector.getInstance(SameSourceMergeOptimizer.class);
 
         UNION_BASED_QUERY_MERGER = injector.getInstance(UnionBasedQueryMerger.class);
 

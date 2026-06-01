@@ -3,6 +3,7 @@ package it.unibz.inf.ontop.iq.optimizer.impl;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
 import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
@@ -139,7 +140,8 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         }
 
         private IQTree mergeGroup(List<MergeCandidate> candidates) {
-            ExtensionalDataNode firstExtData = candidates.get(0).extDataNode;
+            MergeCandidate first = candidates.get(0);
+            ExtensionalDataNode firstExtData = first.extDataNode;
             ImmutableMap<Integer, ? extends VariableOrGroundTerm> mergedArgs = firstExtData.getArgumentMap();
 
             Substitution<ImmutableTerm> mergedSub = mergeSubstitutions(candidates);
@@ -147,7 +149,9 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             ExtensionalDataNode mergedExtData = iqFactory.createExtensionalDataNode(
                     firstExtData.getRelationDefinition(), mergedArgs);
 
-            ImmutableSet<Variable> projectedVars = mergedSub.getDomain();
+            ImmutableSet<Variable> projectedVars = candidates.stream()
+                    .flatMap(c -> c.constructionNode.getVariables().stream())
+                    .collect(ImmutableCollectors.toSet());
             ConstructionNode mergedConstr = iqFactory.createConstructionNode(projectedVars, mergedSub);
 
             VariableOrGroundTerm idVar = mergedArgs.get(0);
@@ -162,21 +166,63 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         }
 
         private Substitution<ImmutableTerm> mergeSubstitutions(List<MergeCandidate> candidates) {
-            Substitution<ImmutableTerm> merged = substitutionFactory.getSubstitution();
-            for (MergeCandidate c : candidates) {
+            MergeCandidate first = candidates.get(0);
+            ImmutableMap<Integer, ? extends VariableOrGroundTerm> referenceArgs = first.extDataNode.getArgumentMap();
+            Substitution<ImmutableTerm> merged = first.constructionNode.getSubstitution();
+
+            for (int i = 1; i < candidates.size(); i++) {
+                MergeCandidate c = candidates.get(i);
                 Substitution<ImmutableTerm> sub = c.constructionNode.getSubstitution();
+                ImmutableMap<Integer, ? extends VariableOrGroundTerm> candidateArgs = c.extDataNode.getArgumentMap();
+
                 for (Variable v : sub.getDomain()) {
                     ImmutableTerm value = sub.get(v);
+                    ImmutableTerm remappedValue = remapToReferenceArgs(value, candidateArgs, referenceArgs);
                     ImmutableTerm existing = merged.get(v);
-                    if (existing != null && !existing.equals(value)) {
+                    if (existing != null && !existing.equals(remappedValue)) {
                         throw new MinorOntopInternalBugException(
                                 "Substitution conflict: variable " + v
-                                        + " bound to both " + existing + " and " + value);
+                                        + " bound to both " + existing + " and " + remappedValue);
+                    }
+                    merged = substitutionFactory.union(merged,
+                            substitutionFactory.getSubstitution(v, remappedValue));
+                }
+
+                ImmutableSet<Variable> candidateChildVars = Sets.difference(
+                        c.constructionNode.getVariables(), sub.getDomain()).immutableCopy();
+                for (Variable v : candidateChildVars) {
+                    ImmutableTerm remappedValue = remapToReferenceArgs(v, candidateArgs, referenceArgs);
+                    if (!remappedValue.equals(v)) {
+                        ImmutableTerm existing = merged.get(v);
+                        if (existing != null && !existing.equals(remappedValue)) {
+                            throw new MinorOntopInternalBugException(
+                                    "Substitution conflict: variable " + v
+                                            + " bound to both " + existing + " and " + remappedValue);
+                        }
+                        merged = substitutionFactory.union(merged,
+                                substitutionFactory.getSubstitution(v, remappedValue));
                     }
                 }
-                merged = substitutionFactory.union(merged, sub);
             }
             return merged;
+        }
+
+        private ImmutableTerm remapToReferenceArgs(ImmutableTerm value,
+                                                   ImmutableMap<Integer, ? extends VariableOrGroundTerm> candidateArgs,
+                                                   ImmutableMap<Integer, ? extends VariableOrGroundTerm> referenceArgs) {
+            if (!(value instanceof Variable)) {
+                return value;
+            }
+            Variable var = (Variable) value;
+            for (Map.Entry<Integer, ? extends VariableOrGroundTerm> entry : candidateArgs.entrySet()) {
+                if (entry.getValue().equals(var)) {
+                    VariableOrGroundTerm refVar = referenceArgs.get(entry.getKey());
+                    if (refVar != null) {
+                        return refVar;
+                    }
+                }
+            }
+            return value;
         }
 
         private static final class MergeCandidate {
