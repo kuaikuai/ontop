@@ -154,15 +154,7 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                     .collect(ImmutableCollectors.toSet());
             ConstructionNode mergedConstr = iqFactory.createConstructionNode(projectedVars, mergedSub);
 
-            VariableOrGroundTerm idVar = mergedArgs.get(0);
-            ImmutableExpression notNullFilter = termFactory.getDBIsNotNull(
-                    (Variable) idVar);
-
-            IQTree constrTree = iqFactory.createUnaryIQTree(mergedConstr, mergedExtData);
-            IQTree filterTree = iqFactory.createUnaryIQTree(
-                    iqFactory.createFilterNode(notNullFilter), constrTree);
-
-            return filterTree.normalizeForOptimization(variableGenerator);
+            return iqFactory.createUnaryIQTree(mergedConstr, mergedExtData);
         }
 
         private Substitution<ImmutableTerm> mergeSubstitutions(List<MergeCandidate> candidates) {
