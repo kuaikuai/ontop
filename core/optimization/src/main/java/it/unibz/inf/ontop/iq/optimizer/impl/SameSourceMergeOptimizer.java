@@ -277,91 +277,31 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
 
         /**
          * Builds equivalence classes of variables from the join condition.
-         * Handles multiple equality formats:
-         * - STRICT_EQ2(A, B)
-         * - A = B (infix equality)
-         * - CAST(A AS CHAR) = CAST(B AS CHAR) (database-level equality)
-         * - AND(STRICT_EQ2(A,B), STRICT_EQ2(C,D)) (conjunction of equalities)
+         * Uses the expression AST (type-safe), not string matching.
+         *
+         * For each conjunct, checks isVar2VarEquality() which internally verifies:
+         * - The function symbol is DBStrictEqFunctionSymbol
+         * - Both terms are Variable instances
+         *
+         * This handles all equality representations: STRICT_EQ2, cast-equalities, etc.
          */
         private Map<Variable, Set<Variable>> buildVariableEquivalenceClasses(InnerJoinNode joinNode) {
             Map<Variable, Set<Variable>> equivalenceClasses = new HashMap<>();
             Optional<ImmutableExpression> condition = joinNode.getOptionalFilterCondition();
             if (!condition.isPresent()) return equivalenceClasses;
 
-            String exprStr = condition.get().toString();
-            LOGGER.info("SameSourceMerge: parsing join condition for equalities: {}", exprStr);
+            condition.get().flattenAND()
+                    .filter(expr -> expr.isVar2VarEquality())
+                    .forEach(expr -> {
+                        Variable v1 = (Variable) expr.getTerm(0);
+                        Variable v2 = (Variable) expr.getTerm(1);
+                        equivalenceClasses.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
+                        equivalenceClasses.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
+                        LOGGER.info("SameSourceMerge: added equivalence {} = {}", v1, v2);
+                    });
 
-            // Pattern 1: STRICT_EQ2(a, b) - function-style equality
-            extractEqualityPairs(exprStr, "STRICT_EQ2\\(([^,]+),([^)]+)\\)", equivalenceClasses);
-
-            // Pattern 2: A = B - infix equality (may be nested inside AND, OR, CAST, etc.)
-            // This pattern looks for " = " but needs to avoid matching <=, >=, !=
-            extractEqualityPairs(exprStr, "([^=<>\\s]+)\\s*=\\s*([^=<>\\s]+)", equivalenceClasses);
-
-            LOGGER.info("SameSourceMerge: found {} equivalence classes", equivalenceClasses.size());
+            LOGGER.info("SameSourceMerge: found {} equivalence pairs", equivalenceClasses.size());
             return equivalenceClasses;
-        }
-
-        private void extractEqualityPairs(String exprStr, String regex,
-                                          Map<Variable, Set<Variable>> equivalenceClasses) {
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(regex);
-            java.util.regex.Matcher matcher = pattern.matcher(exprStr);
-            while (matcher.find()) {
-                String var1Str = matcher.group(1).trim();
-                String var2Str = matcher.group(2).trim();
-
-                // Extract variable names - look for pattern like v1.id or just v1
-                String var1 = extractVariableFromEqualitySide(var1Str);
-                String var2 = extractVariableFromEqualitySide(var2Str);
-
-                // Skip if either side looks like a constant
-                if (var1Str.matches("['\"].*") || var2Str.matches("['\"].*")) continue;
-                if (var1Str.matches("\\d+") || var2Str.matches("\\d+")) continue;
-                // Skip if we couldn't extract variable names
-                if (var1 == null || var2 == null) continue;
-
-                Variable v1 = findVariableByName(var1);
-                Variable v2 = findVariableByName(var2);
-                if (v1 != null && v2 != null) {
-                    equivalenceClasses.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
-                    equivalenceClasses.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
-                    LOGGER.info("SameSourceMerge: added equivalence {} = {}", v1, v2);
-                }
-            }
-        }
-
-        /**
-         * Extracts the variable name from one side of an equality expression.
-         * Examples:
-         * - "v1.id" -> "v1"
-         * - "CAST(v1.id AS CHAR)" -> "v1"
-         * - "?topic" -> "topic"
-         * - "id" -> "id"
-         */
-        private String extractVariableFromEqualitySide(String expr) {
-            // Remove leading ? for SPARQL variables
-            if (expr.startsWith("?")) {
-                expr = expr.substring(1);
-            }
-
-            // Try to find a simple identifier pattern: letter followed by alphanumeric and optional .xxx
-            // Pattern: starts with lowercase letter, then alphanumeric or .
-            java.util.regex.Pattern p = java.util.regex.Pattern.compile("([a-zA-Z_][a-zA-Z0-9_]*)(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)?");
-            java.util.regex.Matcher m = p.matcher(expr);
-            if (m.find()) {
-                return m.group(1); // Return just the first identifier (e.g., "v1" from "v1.id")
-            }
-            // Fallback: if no pattern matched but it looks simple, return as-is
-            if (!expr.contains("(") && !expr.contains("'") && !expr.matches("\\d+")) {
-                return expr;
-            }
-            return null;
-        }
-
-        private Variable findVariableByName(String name) {
-            // Variables in expression strings look like: ?v0, v0, ?A, etc.
-            String varName = name.startsWith("?") ? name.substring(1) : name;
-            return termFactory.getVariable(varName);
         }
 
         private boolean areVariablesEquivalent(VariableOrGroundTerm v1, VariableOrGroundTerm v2,

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/code-yeongyu/oh-my-opencode/master/assets/oh-my-opencode.schema.json",
+  "agents": {
+    "sisyphus": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "hephaestus": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "oracle": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "librarian": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "explore": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "multimodal-looker": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "prometheus": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "metis": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "momus": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "atlas": {
+      "model": "deepseek/deepseek-v4-pro"
+    }
+  },
+  "categories": {
+    "visual-engineering": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "ultrabrain": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "deep": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "artistry": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "quick": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "unspecified-low": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    },
+    "unspecified-high": {
+      "model": "deepseek/deepseek-v4-pro"
+    },
+    "writing": {
+      "model": "minimax-cn-coding-plan/MiniMax-M2.7"
+    }
+  }
+}
