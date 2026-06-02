@@ -310,13 +310,12 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                 String var1Str = matcher.group(1).trim();
                 String var2Str = matcher.group(2).trim();
 
-                // Extract the actual variable names from expressions like CAST(v1.id AS CHAR)
-                // or v1.id - we want the last identifier before any parenthesis or comma
-                String var1 = extractVariableName(var1Str);
-                String var2 = extractVariableName(var2Str);
+                // Extract variable names - look for pattern like v1.id or just v1
+                String var1 = extractVariableFromEqualitySide(var1Str);
+                String var2 = extractVariableFromEqualitySide(var2Str);
 
-                // Skip if either side looks like a constant (contains ',", or is purely numeric)
-                if (var1Str.matches(".*['\"].*") || var2Str.matches(".*['\"].*")) continue;
+                // Skip if either side looks like a constant
+                if (var1Str.matches("['\"].*") || var2Str.matches("['\"].*")) continue;
                 if (var1Str.matches("\\d+") || var2Str.matches("\\d+")) continue;
                 // Skip if we couldn't extract variable names
                 if (var1 == null || var2 == null) continue;
@@ -332,27 +331,31 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         }
 
         /**
-         * Extracts the variable name from an expression.
+         * Extracts the variable name from one side of an equality expression.
          * Examples:
          * - "v1.id" -> "v1"
          * - "CAST(v1.id AS CHAR)" -> "v1"
          * - "?topic" -> "topic"
          * - "id" -> "id"
          */
-        private String extractVariableName(String expr) {
-            // Handle qualified names like v1.id - extract the first part
-            if (expr.contains(".")) {
-                expr = expr.substring(0, expr.indexOf("."));
-            }
+        private String extractVariableFromEqualitySide(String expr) {
             // Remove leading ? for SPARQL variables
             if (expr.startsWith("?")) {
                 expr = expr.substring(1);
             }
-            // Return null if it looks like a function call or constant
-            if (expr.contains("(") || expr.matches("\\d+") || expr.matches("['\"].*")) {
-                return null;
+
+            // Try to find a simple identifier pattern: letter followed by alphanumeric and optional .xxx
+            // Pattern: starts with lowercase letter, then alphanumeric or .
+            java.util.regex.Pattern p = java.util.regex.Pattern.compile("([a-zA-Z_][a-zA-Z0-9_]*)(?:\\.[a-zA-Z_][a-zA-Z0-9_]*)?");
+            java.util.regex.Matcher m = p.matcher(expr);
+            if (m.find()) {
+                return m.group(1); // Return just the first identifier (e.g., "v1" from "v1.id")
             }
-            return expr;
+            // Fallback: if no pattern matched but it looks simple, return as-is
+            if (!expr.contains("(") && !expr.contains("'") && !expr.matches("\\d+")) {
+                return expr;
+            }
+            return null;
         }
 
         private Variable findVariableByName(String name) {
