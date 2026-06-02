@@ -427,6 +427,130 @@ public class SameSourceMergeOptimizerTest {
         assertEquals(1, countExtensionalNodes(result.getTree()));
     }
 
+    @Test
+    public void testExtractionFailureDoesNotBlockMerge() {
+        // 3 children: 2 mergeable, 1 unmergeable (has FilterNode between Constr and ExtData)
+        // The 2 mergeable ones should still merge despite the unmergeable child
+
+        // Mergeable child 1
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, A, 1, B));
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
+
+        // Mergeable child 2
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, C, 1, D));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
+
+        // Unmergeable child: ConstructionNode → ConstructionNode (instead of ConstructionNode → ExtData)
+        ExtensionalDataNode dataNode3 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, E, 1, F));
+        ConstructionNode constr3 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(E, F));
+        ConstructionNode wrapper = IQ_FACTORY.createConstructionNode(ImmutableSet.of(E, F));
+        IQTree unmergeableChild = IQ_FACTORY.createUnaryIQTree(wrapper,
+                IQ_FACTORY.createUnaryIQTree(constr3, dataNode3));
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                IQ_FACTORY.createInnerJoinNode(),
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
+                        unmergeableChild));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, A, C);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+        assertEquals(3, countExtensionalNodes(initialQuery.getTree()));
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        // 2 mergeable children merged into 1, plus 1 unmergeable = 2 total
+        assertEquals(2, countExtensionalNodes(result.getTree()));
+    }
+
+    @Test
+    public void testTransitiveVariableEquivalence() {
+        // 3 children with different keySets {0,1}, {0,3}, {0,5}
+        // Join condition: AND(STRICT_EQ2(A, C), STRICT_EQ2(C, E))
+        // A=C and C=E → A should be equivalent to E transitively
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, A, 1, B));
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, C, 3, D));
+        ExtensionalDataNode dataNode3 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, E, 5, F));
+
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
+        ConstructionNode constr3 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(E, F));
+
+        // A = C AND C = E → transitively A = E
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getStrictEquality(A, C),
+                TERM_FACTORY.getStrictEquality(C, E));
+        InnerJoinNode joinNode = IQ_FACTORY.createInnerJoinNode(condition);
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                joinNode,
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
+                        IQ_FACTORY.createUnaryIQTree(constr3, dataNode3)));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, A, C);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+        assertEquals(3, countExtensionalNodes(initialQuery.getTree()));
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        // All 3 should merge because A, C, E are transitively equivalent
+        assertEquals(1, countExtensionalNodes(result.getTree()));
+    }
+
+    @Test
+    public void testStrictMergeThenRelaxedMerge() {
+        // 4 children:
+        //   child 0: keySet={0,1}  }
+        //   child 1: keySet={0,1}  } -- same keySet → strict merge
+        //   child 2: keySet={0,5}  } -- different keySet but same relationDef → relaxed merge
+        //   child 3: keySet={0,6}  }
+        // Expected: all 4 merge into 1
+        Variable idVar = TERM_FACTORY.getVariable("id");
+
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, idVar, 1, A));
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, idVar, 1, B));
+        ExtensionalDataNode dataNode3 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, idVar, 5, C));
+        ExtensionalDataNode dataNode4 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, idVar, 6, D));
+
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, A));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, B));
+        ConstructionNode constr3 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, C));
+        ConstructionNode constr4 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, D));
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                IQ_FACTORY.createInnerJoinNode(),
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
+                        IQ_FACTORY.createUnaryIQTree(constr3, dataNode3),
+                        IQ_FACTORY.createUnaryIQTree(constr4, dataNode4)));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, idVar, A);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+        assertEquals(4, countExtensionalNodes(initialQuery.getTree()));
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        // 2 strict-merged into 1, 2 relaxed-merged into 1 = 2 total ExtData nodes
+        assertEquals(2, countExtensionalNodes(result.getTree()));
+    }
+
     private static int countExtensionalNodes(IQTree tree) {
         return (int) new ExtensionalDataNodeExtractor().transform(tree).count();
     }

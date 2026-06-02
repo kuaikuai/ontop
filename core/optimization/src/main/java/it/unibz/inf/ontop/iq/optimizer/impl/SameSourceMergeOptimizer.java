@@ -83,25 +83,12 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         @Override
         public IQTree transformInnerJoin(NaryIQTree tree, InnerJoinNode node,
                                           ImmutableList<IQTree> children) {
-            LOGGER.info("SameSourceMerge: transformInnerJoin called with {} children", children.size());
-            for (int i = 0; i < children.size(); i++) {
-                IQTree child = children.get(i);
-                LOGGER.info("  child[{}]: type={}", i, child.getClass().getSimpleName());
-                if (child instanceof UnaryIQTree) {
-                    UnaryIQTree unary = (UnaryIQTree) child;
-                    LOGGER.info("  child[{}] rootNode: {}",
-                            i, unary.getRootNode().getClass().getSimpleName());
-                    LOGGER.info("  child[{}] child: {}",
-                            i, unary.getChild().getClass().getSimpleName());
-                }
-            }
-
+            LOGGER.debug("SameSourceMerge: transformInnerJoin called with {} children", children.size());
             Optional<IQTree> merged = tryMergeSameSourceNodes(node, children);
             if (merged.isPresent()) {
-                LOGGER.info("SameSourceMerge: successfully merged into {}", merged.get().getClass().getSimpleName());
+                LOGGER.info("SameSourceMerge: successfully merged {} children into 1 node", children.size());
                 return merged.get();
             }
-            LOGGER.info("SameSourceMerge: merge not applied, transforming children individually");
             ImmutableList<IQTree> transformedChildren = children.stream()
                     .map(c -> c.acceptVisitor(this))
                     .collect(ImmutableCollectors.toList());
@@ -109,109 +96,91 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         }
 
         private Optional<IQTree> tryMergeSameSourceNodes(InnerJoinNode joinNode, ImmutableList<IQTree> children) {
-            // Phase 1: Strict grouping by (relationDef, keySet) — always safe
-            Map<MergeKey, List<MergeCandidate>> groups = new LinkedHashMap<>();
+            // Separate mergeable candidates from unmergeable children
+            List<MergeCandidate> candidates = new ArrayList<>();
+            List<IQTree> unmergeableChildren = new ArrayList<>();
 
             for (int i = 0; i < children.size(); i++) {
                 IQTree child = children.get(i);
                 Optional<MergeCandidate> candidate = extractCandidate(child);
-                if (!candidate.isPresent()) {
-                    LOGGER.info("SameSourceMerge: extractCandidate failed for child[{}]: type={}", i, child.getClass().getSimpleName());
-                    return Optional.empty();
+                if (candidate.isPresent()) {
+                    candidates.add(candidate.get());
+                    MergeKey key = candidate.get().key();
+                    LOGGER.debug("SameSourceMerge: child[{}] MergeKey: relationDef={}, keySet={}, constrVars={}",
+                            i, key.relationDef, key.keySet, candidate.get().constructionNode.getVariables());
+                } else {
+                    LOGGER.debug("SameSourceMerge: extractCandidate failed for child[{}]: type={}",
+                            i, child.getClass().getSimpleName());
+                    unmergeableChildren.add(child);
                 }
-                MergeKey key = candidate.get().key();
-                LOGGER.info("SameSourceMerge: child[{}] MergeKey: relationDef={}, keySet={}, constrVars={}",
-                        i, key.relationDef, key.keySet, candidate.get().constructionNode.getVariables());
-                groups.computeIfAbsent(key, k -> new ArrayList<>()).add(candidate.get());
             }
 
-            // Try strict merging first (same relationDef AND same keySet)
-            boolean hasStrictGroup = groups.values().stream().anyMatch(g -> g.size() > 1);
-
-            if (!hasStrictGroup) {
-                // Phase 2: Relaxed grouping by relationDef only.
-                // We no longer require explicit variable equality condition (e.g., v1.id = v2.id)
-                // because:
-                // 1. canMergeSafely() already validates that non-common positions are disjoint,
-                //    which is the real safety requirement for avoiding column aliasing.
-                // 2. When children use the same variable (implicit equality), the join condition
-                //    may not contain "=" or "STRICT_EQ2", yet merging is still safe.
-                Map<RelationDefinition, List<MergeCandidate>> relaxedGroups = new LinkedHashMap<>();
-                for (List<MergeCandidate> group : groups.values()) {
-                    for (MergeCandidate c : group) {
-                        relaxedGroups.computeIfAbsent(c.extDataNode.getRelationDefinition(),
-                                k -> new ArrayList<>()).add(c);
-                    }
-                }
-
-                boolean hasRelaxedGroup = relaxedGroups.values().stream().anyMatch(g -> g.size() > 1);
-                if (!hasRelaxedGroup) {
-                    LOGGER.info("SameSourceMerge: no group has more than 1 candidate (strict or relaxed)");
-                    return Optional.empty();
-                }
-
-                // Use relaxed groups for merging, with safety validation
-                Optional<IQTree> result = tryRelaxedMerge(relaxedGroups, joinNode);
-                if (!result.isPresent()) {
-                    LOGGER.info("SameSourceMerge: relaxed merge rejected (keySet conflicts)");
-                    return Optional.empty();
-                }
-                LOGGER.info("SameSourceMerge: relaxed merge accepted");
-                return result;
+            if (candidates.size() <= 1) {
+                // Nothing to merge (need at least 2 mergeable candidates)
+                return Optional.empty();
             }
 
-            // Strict merge (existing behavior)
-            LOGGER.info("SameSourceMerge: {} strict groups, attempting merge", groups.size());
+            // Phase 1: Group by (relationDef, keySet) for strict merge
+            Map<MergeKey, List<MergeCandidate>> strictGroups = new LinkedHashMap<>();
+            for (MergeCandidate c : candidates) {
+                strictGroups.computeIfAbsent(c.key(), k -> new ArrayList<>()).add(c);
+            }
 
+            // Apply strict merge to groups with >1 candidate, collect singletons
             List<IQTree> mergedChildren = new ArrayList<>();
-            for (List<MergeCandidate> group : groups.values()) {
+            List<MergeCandidate> remainingSingletons = new ArrayList<>();
+
+            for (List<MergeCandidate> group : strictGroups.values()) {
                 if (group.size() > 1) {
                     mergedChildren.add(mergeGroup(group));
+                    LOGGER.info("SameSourceMerge: strict merge applied to {} children", group.size());
                 } else {
-                    mergedChildren.add(group.get(0).tree);
+                    remainingSingletons.add(group.get(0));
                 }
             }
+
+            // Phase 2: Try relaxed merge for remaining singletons
+            if (remainingSingletons.size() > 1) {
+                Map<RelationDefinition, List<MergeCandidate>> relaxedGroups = new LinkedHashMap<>();
+                for (MergeCandidate c : remainingSingletons) {
+                    relaxedGroups.computeIfAbsent(c.extDataNode.getRelationDefinition(),
+                            k -> new ArrayList<>()).add(c);
+                }
+
+                for (List<MergeCandidate> group : relaxedGroups.values()) {
+                    if (group.size() > 1 && canMergeSafely(group, joinNode)) {
+                        mergedChildren.add(mergeGroup(group));
+                        LOGGER.info("SameSourceMerge: relaxed merge applied to {} children", group.size());
+                    } else {
+                        for (MergeCandidate c : group) {
+                            mergedChildren.add(c.tree);
+                        }
+                    }
+                }
+            } else {
+                // 0 or 1 singleton: pass through as-is
+                for (MergeCandidate c : remainingSingletons) {
+                    mergedChildren.add(c.tree);
+                }
+            }
+
+            // Add unmergeable children back
+            mergedChildren.addAll(unmergeableChildren);
 
             if (mergedChildren.size() == 1) {
                 return Optional.of(mergedChildren.get(0));
             }
+
+            // Only create a new InnerJoin if we actually changed something
+            if (mergedChildren.equals(children)) {
+                return Optional.empty();
+            }
+
             return Optional.of(iqFactory.createNaryIQTree(
                     iqFactory.createInnerJoinNode(),
                     ImmutableList.copyOf(mergedChildren)));
         }
 
-        /**
-         * Checks whether the InnerJoin's filter condition contains variable-to-variable
-         * equality (e.g., v1.id = v2.id). Such equalities bind the common key columns
-         * across children, making it safe to merge them into a single access.
-         *
-         * NOTE: this is a heuristic. It returns true if the condition contains "STRICT_EQ2"
-         * or " = " which could match variable-to-constant equality. For safety, the caller
-         * should rely on canMergeSafely to reject cases where non-common keySet positions
-         * have overlapping variables.
-         */
-        private boolean hasVariableEqualityCondition(InnerJoinNode node) {
-            Optional<ImmutableExpression> condition = node.getOptionalFilterCondition();
-            if (!condition.isPresent()) return false;
-
-            // Check for variable-to-variable equalities.
-            // Ontop represents equality as either "a = b" (infix) or "STRICT_EQ2(a,b)" (function).
-            // We check for STRICT_EQ2 as it only appears in function-based equality.
-            // The " = " heuristic is more permissive but can be relaxed since
-            // canMergeSafely provides the real safety net for keySet conflicts.
-            String exprStr = condition.get().toString();
-            LOGGER.info("SameSourceMerge: join condition: {}", exprStr);
-            return exprStr.contains("STRICT_EQ2") || exprStr.contains(" = ");
-        }
-
-        /**
-         * Validates whether candidates with the same relationDef but DIFFERENT keySets
-         * can be safely merged. Two conditions must hold:
-         * 1. Common positions must map to VARIABLES THAT ARE EQUIVALENT via the join condition
-         *    (e.g., v1.id = v2.id makes v1.id and v2.id equivalent, so merging is safe).
-         *    If they are different variables WITHOUT equality, merging would alias them.
-         * 2. Non-common positions must be disjoint across candidates.
-         */
         private boolean canMergeSafely(List<MergeCandidate> candidates, InnerJoinNode joinNode) {
             if (candidates.size() <= 1) return false;
 
@@ -279,73 +248,79 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
          * Builds equivalence classes of variables from the join condition.
          * Uses the expression AST (type-safe), not string matching.
          *
-         * For each conjunct, checks isVar2VarEquality() which internally verifies:
-         * - The function symbol is DBStrictEqFunctionSymbol
-         * - Both terms are Variable instances
+         * Steps:
+         * 1. Extract direct variable equality pairs from flattenAND() conjuncts
+         * 2. Compute transitive closure (connected components in the equality graph)
+         *    so that A=C and C=D implies A=D
          *
-         * This handles all equality representations: STRICT_EQ2, cast-equalities, etc.
+         * Returns: map from each variable to the FULL set of equivalent variables
+         *          (including itself implicitly via areVariablesEquivalent checks)
          */
         private Map<Variable, Set<Variable>> buildVariableEquivalenceClasses(InnerJoinNode joinNode) {
-            Map<Variable, Set<Variable>> equivalenceClasses = new HashMap<>();
+            Map<Variable, Set<Variable>> directPairs = new HashMap<>();
             Optional<ImmutableExpression> condition = joinNode.getOptionalFilterCondition();
-            if (!condition.isPresent()) return equivalenceClasses;
+            if (!condition.isPresent()) return directPairs;
 
+            // Step 1: Extract direct equality pairs
             condition.get().flattenAND()
                     .filter(expr -> expr.isVar2VarEquality())
                     .forEach(expr -> {
                         Variable v1 = (Variable) expr.getTerm(0);
                         Variable v2 = (Variable) expr.getTerm(1);
-                        equivalenceClasses.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
-                        equivalenceClasses.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
-                        LOGGER.info("SameSourceMerge: added equivalence {} = {}", v1, v2);
+                        directPairs.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
+                        directPairs.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
                     });
 
-            LOGGER.info("SameSourceMerge: found {} equivalence pairs", equivalenceClasses.size());
-            return equivalenceClasses;
+            // Step 2: Compute transitive closure via connected components
+            Map<Variable, Set<Variable>> transitiveClosure = new HashMap<>();
+            for (Variable v : directPairs.keySet()) {
+                if (!transitiveClosure.containsKey(v)) {
+                    Set<Variable> component = computeConnectedComponent(v, directPairs);
+                    for (Variable member : component) {
+                        transitiveClosure.put(member, component);
+                    }
+                }
+            }
+
+            LOGGER.debug("SameSourceMerge: {} direct pairs, {} variables in equivalence classes",
+                    directPairs.size(), transitiveClosure.size());
+            return transitiveClosure;
+        }
+
+        /**
+         * Computes the connected component containing the start variable
+         * in the equality graph using DFS.
+         */
+        private Set<Variable> computeConnectedComponent(Variable start,
+                                                        Map<Variable, Set<Variable>> directPairs) {
+            Set<Variable> visited = new HashSet<>();
+            Deque<Variable> stack = new ArrayDeque<>();
+            stack.push(start);
+            visited.add(start);
+            while (!stack.isEmpty()) {
+                Variable current = stack.pop();
+                Set<Variable> neighbors = directPairs.get(current);
+                if (neighbors != null) {
+                    for (Variable neighbor : neighbors) {
+                        if (visited.add(neighbor)) {
+                            stack.push(neighbor);
+                        }
+                    }
+                }
+            }
+            return visited;
         }
 
         private boolean areVariablesEquivalent(VariableOrGroundTerm v1, VariableOrGroundTerm v2,
                                                Map<Variable, Set<Variable>> equivalenceClasses) {
             if (v1.equals(v2)) return true;
             if (!(v1 instanceof Variable) || !(v2 instanceof Variable)) return false;
-            Set<Variable> eq1 = equivalenceClasses.get(v1);
-            if (eq1 != null && eq1.contains(v2)) return true;
-            Set<Variable> eq2 = equivalenceClasses.get(v2);
-            if (eq2 != null && eq2.contains(v1)) return true;
-            return false;
-        }
-
-        /**
-         * Attempts a relaxed merge where candidates are grouped by relationDef only.
-         * Each group passes through canMergeSafely before merging.
-         */
-        private Optional<IQTree> tryRelaxedMerge(Map<RelationDefinition, List<MergeCandidate>> relaxedGroups, InnerJoinNode joinNode) {
-            List<IQTree> mergedChildren = new ArrayList<>();
-            boolean anyMerged = false;
-
-            for (List<MergeCandidate> group : relaxedGroups.values()) {
-                if (group.size() > 1 && canMergeSafely(group, joinNode)) {
-                    mergedChildren.add(mergeGroup(group));
-                    anyMerged = true;
-                } else {
-                    for (MergeCandidate c : group) {
-                        mergedChildren.add(c.tree);
-                    }
-                }
-            }
-
-            if (!anyMerged) return Optional.empty();
-
-            if (mergedChildren.size() == 1) {
-                return Optional.of(mergedChildren.get(0));
-            }
-            return Optional.of(iqFactory.createNaryIQTree(
-                    iqFactory.createInnerJoinNode(),
-                    ImmutableList.copyOf(mergedChildren)));
+            Set<Variable> eq = equivalenceClasses.get(v1);
+            return eq != null && eq.contains(v2);
         }
 
         private Optional<MergeCandidate> extractCandidate(IQTree child) {
-            LOGGER.info("SameSourceMerge: extractCandidate called for child type: {}", child.getClass().getSimpleName());
+            LOGGER.debug("SameSourceMerge: extractCandidate called for child type: {}", child.getClass().getSimpleName());
 
             ConstructionNode constr;
             ExtensionalDataNode extData;
@@ -358,18 +333,18 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                         constr = (ConstructionNode) unary.getRootNode();
                         extData = (ExtensionalDataNode) grandchild;
                     } else {
-                        LOGGER.info("SameSourceMerge: grandchild is not ExtData: {}", grandchild.getClass().getSimpleName());
+                        LOGGER.debug("SameSourceMerge: grandchild is not ExtData: {}", grandchild.getClass().getSimpleName());
                         return Optional.empty();
                     }
                 } else {
-                    LOGGER.info("SameSourceMerge: rootNode is not ConstructionNode: {}", unary.getRootNode().getClass().getSimpleName());
+                    LOGGER.debug("SameSourceMerge: rootNode is not ConstructionNode: {}", unary.getRootNode().getClass().getSimpleName());
                     return Optional.empty();
                 }
             } else if (child instanceof ExtensionalDataNode) {
                 // ConstructionNode was stripped by InnerJoinNormalizer (empty substitution)
                 // Treat as a construction with empty substitution
                 extData = (ExtensionalDataNode) child;
-                LOGGER.info("SameSourceMerge: child is direct ExtData - creating empty ConstructionNode");
+                LOGGER.debug("SameSourceMerge: child is direct ExtData - creating empty ConstructionNode");
                 // Create a dummy ConstructionNode with empty substitution - variables come from extData's argument map
                 ImmutableMap<Integer, ? extends VariableOrGroundTerm> args = extData.getArgumentMap();
                 ImmutableSet<Variable> vars = args.values().stream()
@@ -378,7 +353,7 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                         .collect(ImmutableCollectors.toSet());
                 constr = iqFactory.createConstructionNode(vars, substitutionFactory.getSubstitution());
             } else {
-                LOGGER.info("SameSourceMerge: child is neither UnaryIQTree nor ExtData: {}", child.getClass().getSimpleName());
+                LOGGER.debug("SameSourceMerge: child is neither UnaryIQTree nor ExtData: {}", child.getClass().getSimpleName());
                 return Optional.empty();
             }
 
