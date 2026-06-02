@@ -309,20 +309,50 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             while (matcher.find()) {
                 String var1Str = matcher.group(1).trim();
                 String var2Str = matcher.group(2).trim();
-                // Skip if either side looks like a function call or CAST
-                if (var1Str.contains("(") || var2Str.contains("(")) continue;
+
+                // Extract the actual variable names from expressions like CAST(v1.id AS CHAR)
+                // or v1.id - we want the last identifier before any parenthesis or comma
+                String var1 = extractVariableName(var1Str);
+                String var2 = extractVariableName(var2Str);
+
                 // Skip if either side looks like a constant (contains ',", or is purely numeric)
                 if (var1Str.matches(".*['\"].*") || var2Str.matches(".*['\"].*")) continue;
                 if (var1Str.matches("\\d+") || var2Str.matches("\\d+")) continue;
+                // Skip if we couldn't extract variable names
+                if (var1 == null || var2 == null) continue;
 
-                Variable var1 = findVariableByName(var1Str);
-                Variable var2 = findVariableByName(var2Str);
-                if (var1 != null && var2 != null) {
-                    equivalenceClasses.computeIfAbsent(var1, k -> new HashSet<>()).add(var2);
-                    equivalenceClasses.computeIfAbsent(var2, k -> new HashSet<>()).add(var1);
-                    LOGGER.info("SameSourceMerge: added equivalence {} = {}", var1, var2);
+                Variable v1 = findVariableByName(var1);
+                Variable v2 = findVariableByName(var2);
+                if (v1 != null && v2 != null) {
+                    equivalenceClasses.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
+                    equivalenceClasses.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
+                    LOGGER.info("SameSourceMerge: added equivalence {} = {}", v1, v2);
                 }
             }
+        }
+
+        /**
+         * Extracts the variable name from an expression.
+         * Examples:
+         * - "v1.id" -> "v1"
+         * - "CAST(v1.id AS CHAR)" -> "v1"
+         * - "?topic" -> "topic"
+         * - "id" -> "id"
+         */
+        private String extractVariableName(String expr) {
+            // Handle qualified names like v1.id - extract the first part
+            if (expr.contains(".")) {
+                expr = expr.substring(0, expr.indexOf("."));
+            }
+            // Remove leading ? for SPARQL variables
+            if (expr.startsWith("?")) {
+                expr = expr.substring(1);
+            }
+            // Return null if it looks like a function call or constant
+            if (expr.contains("(") || expr.matches("\\d+") || expr.matches("['\"].*")) {
+                return null;
+            }
+            return expr;
         }
 
         private Variable findVariableByName(String name) {
