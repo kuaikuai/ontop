@@ -12,7 +12,9 @@ import it.unibz.inf.ontop.iq.node.*;
 import it.unibz.inf.ontop.iq.visit.impl.ExtensionalDataNodeExtractor;
 import it.unibz.inf.ontop.model.atom.DistinctVariableOnlyDataAtom;
 import it.unibz.inf.ontop.model.term.ImmutableExpression;
+import it.unibz.inf.ontop.model.term.ImmutableFunctionalTerm;
 import it.unibz.inf.ontop.model.term.Variable;
+import it.unibz.inf.ontop.model.type.DBTermType;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -549,6 +551,103 @@ public class SameSourceMergeOptimizerTest {
         IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
         // 2 strict-merged into 1, 2 relaxed-merged into 1 = 2 total ExtData nodes
         assertEquals(2, countExtensionalNodes(result.getTree()));
+    }
+
+    @Test
+    public void testCastWrappedVariableEquality() {
+        // Production scenario: join condition uses CAST(v1.id AS CHAR) = CAST(v2.id AS CHAR)
+        // where both sides are CAST expressions, not bare Variables.
+        // The fix: extractVariableFromTerm() unwraps CAST to get the underlying Variable.
+        // After fix: A and C are recognized as equivalent → relaxed merge succeeds.
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, A, 1, B));
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, C, 3, D));
+
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
+
+        // Build CAST(A AS CHAR) = CAST(C AS CHAR) as join condition
+        DBTermType charType = TYPE_FACTORY.getDBTypeFactory().getDBStringType();
+        ImmutableFunctionalTerm castA = TERM_FACTORY.getDBCastFunctionalTerm(charType, charType, A);
+        ImmutableFunctionalTerm castC = TERM_FACTORY.getDBCastFunctionalTerm(charType, charType, C);
+        ImmutableExpression condition = TERM_FACTORY.getStrictEquality(castA, castC);
+        InnerJoinNode joinNode = IQ_FACTORY.createInnerJoinNode(condition);
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                joinNode,
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2)));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, A, C);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+        assertEquals(2, countExtensionalNodes(initialQuery.getTree()));
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        // CAST-wrapped equality should be recognized → both children merged into 1
+        assertEquals(1, countExtensionalNodes(result.getTree()));
+    }
+
+    @Test
+    public void testFilterConditionPreservedAfterMerge() {
+        // Two children with same relationDef, different keySets.
+        // Join condition: STRICT_EQ2(A, C) AND DB_IS_NOT_NULL(B)
+        // After merge to single child:
+        //   - Equality conjunct (A=C) is dropped (merged away via putIfAbsent)
+        //   - Filter conjunct (DB_IS_NOT_NULL(B)) survives as FilterNode
+
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, A, 1, B));
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, C, 3, D));
+
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
+
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getStrictEquality(A, C),
+                TERM_FACTORY.getDBIsNotNull(B));
+        InnerJoinNode joinNode = IQ_FACTORY.createInnerJoinNode(condition);
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                joinNode,
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2)));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, A, B);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+
+        assertEquals(2, countExtensionalNodes(initialQuery.getTree()));
+
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+
+        // Merged to 1 ExtData
+        assertEquals("Expected merge to single ExtData", 1, countExtensionalNodes(result.getTree()));
+
+        // Navigate result tree to find FilterNode
+        IQTree resultTree = result.getTree();
+        assertTrue("Result should be UnaryIQTree", resultTree instanceof UnaryIQTree);
+        UnaryIQTree topUnary = (UnaryIQTree) resultTree;
+        assertTrue("Top node should be ConstructionNode", topUnary.getRootNode() instanceof ConstructionNode);
+
+        IQTree belowTopConstr = topUnary.getChild();
+        assertTrue("Expected FilterNode below top ConstructionNode to preserve filter condition",
+                belowTopConstr instanceof UnaryIQTree
+                        && ((UnaryIQTree) belowTopConstr).getRootNode() instanceof FilterNode);
+
+        FilterNode filterNode = (FilterNode) ((UnaryIQTree) belowTopConstr).getRootNode();
+        ImmutableExpression filterCondition = filterNode.getFilterCondition();
+
+        // Verify: at least one conjunct survived (the filter)
+        assertTrue("FilterNode should retain filter condition after merge",
+                filterCondition.flattenAND().findAny().isPresent());
     }
 
     private static int countExtensionalNodes(IQTree tree) {

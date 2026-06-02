@@ -20,10 +20,13 @@ import it.unibz.inf.ontop.iq.optimizer.IQOptimizer;
 import it.unibz.inf.ontop.iq.transform.IQTreeVariableGeneratorTransformer;
 import it.unibz.inf.ontop.iq.transform.impl.DefaultRecursiveIQTreeVisitingTransformer;
 import it.unibz.inf.ontop.model.term.ImmutableExpression;
+import it.unibz.inf.ontop.model.term.ImmutableFunctionalTerm;
 import it.unibz.inf.ontop.model.term.ImmutableTerm;
 import it.unibz.inf.ontop.model.term.TermFactory;
 import it.unibz.inf.ontop.model.term.Variable;
 import it.unibz.inf.ontop.model.term.VariableOrGroundTerm;
+import it.unibz.inf.ontop.model.term.functionsymbol.db.DBStrictEqFunctionSymbol;
+import it.unibz.inf.ontop.model.term.functionsymbol.db.DBTypeConversionFunctionSymbol;
 import it.unibz.inf.ontop.substitution.Substitution;
 import it.unibz.inf.ontop.substitution.SubstitutionFactory;
 import it.unibz.inf.ontop.utils.ImmutableCollectors;
@@ -167,8 +170,48 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             // Add unmergeable children back
             mergedChildren.addAll(unmergeableChildren);
 
+            // Collect variable remapping from all merged children
+            Substitution<ImmutableTerm> mergedSubstitution = substitutionFactory.getSubstitution();
+            for (IQTree child : mergedChildren) {
+                if (child instanceof UnaryIQTree
+                        && ((UnaryIQTree) child).getRootNode() instanceof ConstructionNode) {
+                    Substitution<ImmutableTerm> sub =
+                            ((ConstructionNode) ((UnaryIQTree) child).getRootNode()).getSubstitution();
+                    mergedSubstitution = substitutionFactory.union(mergedSubstitution, sub);
+                }
+            }
+            final Substitution<ImmutableTerm> finalSubstitution = mergedSubstitution;
+
+            // Rewrite join condition using merged variable remapping.
+            // This converts vars eliminated by putIfAbsent (e.g. v2 → v1) so downstream
+            // conjuncts like CONTAINS(v2, "x") survive as CONTAINS(v1, "x").
+            Optional<ImmutableExpression> rewrittenCondition = joinNode.getOptionalFilterCondition()
+                    .flatMap(condition -> {
+                        ImmutableTerm result = finalSubstitution.apply(condition);
+                        if (result instanceof ImmutableExpression)
+                            return Optional.of((ImmutableExpression) result);
+                        LOGGER.warn("SameSourceMerge: substitution lost expression type, dropping");
+                        return Optional.empty();
+                    });
+
             if (mergedChildren.size() == 1) {
-                return Optional.of(mergedChildren.get(0));
+                IQTree result = mergedChildren.get(0);
+                if (rewrittenCondition.isPresent()) {
+                    ImmutableSet<Variable> mergedVars = result.getVariables();
+                    ImmutableList<ImmutableExpression> retained = rewrittenCondition.get().flattenAND()
+                            // Drop self-comparisons: v1.val > v1.val after substitution
+                            .filter(c -> !isSelfComparison(c))
+                            // Only keep conjuncts whose variables still exist
+                            .filter(c -> mergedVars.containsAll(extractAllVariables(c)))
+                            .collect(ImmutableCollectors.toList());
+                    if (!retained.isEmpty()) {
+                        LOGGER.debug("SameSourceMerge: retained {} filter conjuncts after merge", retained.size());
+                        result = iqFactory.createUnaryIQTree(
+                                iqFactory.createFilterNode(termFactory.getConjunction(retained)),
+                                result);
+                    }
+                }
+                return Optional.of(result);
             }
 
             // Only create a new InnerJoin if we actually changed something
@@ -176,8 +219,11 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                 return Optional.empty();
             }
 
-            return Optional.of(iqFactory.createNaryIQTree(
-                    iqFactory.createInnerJoinNode(),
+            // Multiple children: keep the rewritten condition
+            InnerJoinNode newJoinNode = rewrittenCondition
+                    .map(iqFactory::createInnerJoinNode)
+                    .orElseGet(iqFactory::createInnerJoinNode);
+            return Optional.of(iqFactory.createNaryIQTree(newJoinNode,
                     ImmutableList.copyOf(mergedChildren)));
         }
 
@@ -261,14 +307,22 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             Optional<ImmutableExpression> condition = joinNode.getOptionalFilterCondition();
             if (!condition.isPresent()) return directPairs;
 
-            // Step 1: Extract direct equality pairs
+            // Step 1: Extract direct equality pairs from join condition.
+            // Handles both bare-variable equality (v1 = v2) and wrapped equality
+            // (CAST(v1.id AS CHAR) = CAST(v2.id AS CHAR)) where variables are
+            // nested inside function terms.
             condition.get().flattenAND()
-                    .filter(expr -> expr.isVar2VarEquality())
+                    .filter(expr -> expr.getFunctionSymbol() instanceof DBStrictEqFunctionSymbol
+                            && expr.getTerms().size() == 2)
                     .forEach(expr -> {
-                        Variable v1 = (Variable) expr.getTerm(0);
-                        Variable v2 = (Variable) expr.getTerm(1);
-                        directPairs.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
-                        directPairs.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
+                        Optional<Variable> ov1 = extractVariableFromTerm(expr.getTerm(0));
+                        Optional<Variable> ov2 = extractVariableFromTerm(expr.getTerm(1));
+                        if (ov1.isPresent() && ov2.isPresent()) {
+                            Variable v1 = ov1.get();
+                            Variable v2 = ov2.get();
+                            directPairs.computeIfAbsent(v1, k -> new HashSet<>()).add(v2);
+                            directPairs.computeIfAbsent(v2, k -> new HashSet<>()).add(v1);
+                        }
                     });
 
             // Step 2: Compute transitive closure via connected components
@@ -288,9 +342,35 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         }
 
         /**
-         * Computes the connected component containing the start variable
-         * in the equality graph using DFS.
+         * Extracts the single underlying variable from a term, unwrapping
+         * CAST and other 1-arity functional wrappers (e.g.
+         * CAST(v1.id AS CHAR) yields Variable("v1.id")).
+         *
+         * Returns empty if the term is not reducible to a single variable
+         * (e.g. constant, multi-arity function, or no variables).
          */
+        private static Optional<Variable> extractVariableFromTerm(ImmutableTerm term) {
+            if (term instanceof Variable) {
+                return Optional.of((Variable) term);
+            }
+            if (term instanceof ImmutableFunctionalTerm) {
+                ImmutableFunctionalTerm ft = (ImmutableFunctionalTerm) term;
+
+                // Try dedicated uncast for temporary type conversions
+                ImmutableTerm unwrapped = DBTypeConversionFunctionSymbol.uncast(term);
+                if (unwrapped != term) {
+                    return extractVariableFromTerm(unwrapped);
+                }
+
+                // For 1-arity functions (like non-temporary CAST),
+                // recurse into the single argument
+                if (ft.getTerms().size() == 1) {
+                    return extractVariableFromTerm(ft.getTerm(0));
+                }
+            }
+            return Optional.empty();
+        }
+
         private Set<Variable> computeConnectedComponent(Variable start,
                                                         Map<Variable, Set<Variable>> directPairs) {
             Set<Variable> visited = new HashSet<>();
@@ -317,6 +397,30 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             if (!(v1 instanceof Variable) || !(v2 instanceof Variable)) return false;
             Set<Variable> eq = equivalenceClasses.get(v1);
             return eq != null && eq.contains(v2);
+        }
+
+        /**
+         * Returns true for self-comparisons like v1.val > v1.val
+         * that can arise after variable substitution during merge.
+         */
+        private static boolean isSelfComparison(ImmutableExpression expr) {
+            return expr.getTerms().size() == 2
+                    && expr.getTerm(0).equals(expr.getTerm(1));
+        }
+
+        /**
+         * Recursively collects all variables from a term tree.
+         */
+        private static ImmutableSet<Variable> extractAllVariables(ImmutableTerm term) {
+            if (term instanceof Variable)
+                return ImmutableSet.of((Variable) term);
+            if (term instanceof ImmutableFunctionalTerm) {
+                ImmutableSet.Builder<Variable> builder = ImmutableSet.builder();
+                for (ImmutableTerm subTerm : ((ImmutableFunctionalTerm) term).getTerms())
+                    builder.addAll(extractAllVariables(subTerm));
+                return builder.build();
+            }
+            return ImmutableSet.of();
         }
 
         private Optional<MergeCandidate> extractCandidate(IQTree child) {
