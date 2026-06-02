@@ -48,6 +48,7 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                                      TermFactory termFactory,
                                      SubstitutionFactory substitutionFactory) {
         super(iqFactory);
+        LOGGER.info("SameSourceMergeOptimizer loaded");
         this.iqTreeTools = iqTreeTools;
         this.termFactory = termFactory;
         this.substitutionFactory = substitutionFactory;
@@ -82,32 +83,85 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         @Override
         public IQTree transformInnerJoin(NaryIQTree tree, InnerJoinNode node,
                                           ImmutableList<IQTree> children) {
-            Optional<IQTree> merged = tryMergeSameSourceNodes(children);
+            LOGGER.info("SameSourceMerge: transformInnerJoin called with {} children", children.size());
+            for (int i = 0; i < children.size(); i++) {
+                IQTree child = children.get(i);
+                LOGGER.info("  child[{}]: type={}", i, child.getClass().getSimpleName());
+                if (child instanceof UnaryIQTree) {
+                    UnaryIQTree unary = (UnaryIQTree) child;
+                    LOGGER.info("  child[{}] rootNode: {}",
+                            i, unary.getRootNode().getClass().getSimpleName());
+                    LOGGER.info("  child[{}] child: {}",
+                            i, unary.getChild().getClass().getSimpleName());
+                }
+            }
+
+            Optional<IQTree> merged = tryMergeSameSourceNodes(node, children);
             if (merged.isPresent()) {
+                LOGGER.info("SameSourceMerge: successfully merged into {}", merged.get().getClass().getSimpleName());
                 return merged.get();
             }
+            LOGGER.info("SameSourceMerge: merge not applied, transforming children individually");
             ImmutableList<IQTree> transformedChildren = children.stream()
                     .map(c -> c.acceptVisitor(this))
                     .collect(ImmutableCollectors.toList());
             return iqFactory.createNaryIQTree(node, transformedChildren);
         }
 
-        private Optional<IQTree> tryMergeSameSourceNodes(ImmutableList<IQTree> children) {
+        private Optional<IQTree> tryMergeSameSourceNodes(InnerJoinNode joinNode, ImmutableList<IQTree> children) {
+            // Phase 1: Strict grouping by (relationDef, keySet) — always safe
             Map<MergeKey, List<MergeCandidate>> groups = new LinkedHashMap<>();
 
-            for (IQTree child : children) {
+            for (int i = 0; i < children.size(); i++) {
+                IQTree child = children.get(i);
                 Optional<MergeCandidate> candidate = extractCandidate(child);
                 if (!candidate.isPresent()) {
+                    LOGGER.info("SameSourceMerge: extractCandidate failed for child[{}]: type={}", i, child.getClass().getSimpleName());
                     return Optional.empty();
                 }
                 MergeKey key = candidate.get().key();
+                LOGGER.info("SameSourceMerge: child[{}] MergeKey: relationDef={}, keySet={}, constrVars={}",
+                        i, key.relationDef, key.keySet, candidate.get().constructionNode.getVariables());
                 groups.computeIfAbsent(key, k -> new ArrayList<>()).add(candidate.get());
             }
 
-            boolean hasMergableGroup = groups.values().stream().anyMatch(g -> g.size() > 1);
-            if (!hasMergableGroup) {
-                return Optional.empty();
+            // Try strict merging first (same relationDef AND same keySet)
+            boolean hasStrictGroup = groups.values().stream().anyMatch(g -> g.size() > 1);
+
+            if (!hasStrictGroup) {
+                // Phase 2: Relaxed grouping by relationDef only.
+                // We no longer require explicit variable equality condition (e.g., v1.id = v2.id)
+                // because:
+                // 1. canMergeSafely() already validates that non-common positions are disjoint,
+                //    which is the real safety requirement for avoiding column aliasing.
+                // 2. When children use the same variable (implicit equality), the join condition
+                //    may not contain "=" or "STRICT_EQ2", yet merging is still safe.
+                Map<RelationDefinition, List<MergeCandidate>> relaxedGroups = new LinkedHashMap<>();
+                for (List<MergeCandidate> group : groups.values()) {
+                    for (MergeCandidate c : group) {
+                        relaxedGroups.computeIfAbsent(c.extDataNode.getRelationDefinition(),
+                                k -> new ArrayList<>()).add(c);
+                    }
+                }
+
+                boolean hasRelaxedGroup = relaxedGroups.values().stream().anyMatch(g -> g.size() > 1);
+                if (!hasRelaxedGroup) {
+                    LOGGER.info("SameSourceMerge: no group has more than 1 candidate (strict or relaxed)");
+                    return Optional.empty();
+                }
+
+                // Use relaxed groups for merging, with safety validation
+                Optional<IQTree> result = tryRelaxedMerge(relaxedGroups, joinNode);
+                if (!result.isPresent()) {
+                    LOGGER.info("SameSourceMerge: relaxed merge rejected (keySet conflicts)");
+                    return Optional.empty();
+                }
+                LOGGER.info("SameSourceMerge: relaxed merge accepted");
+                return result;
             }
+
+            // Strict merge (existing behavior)
+            LOGGER.info("SameSourceMerge: {} strict groups, attempting merge", groups.size());
 
             List<IQTree> mergedChildren = new ArrayList<>();
             for (List<MergeCandidate> group : groups.values()) {
@@ -126,40 +180,260 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                     ImmutableList.copyOf(mergedChildren)));
         }
 
-        private Optional<MergeCandidate> extractCandidate(IQTree child) {
-            if (!(child instanceof UnaryIQTree)) return Optional.empty();
-            UnaryIQTree unary = (UnaryIQTree) child;
-            if (!(unary.getRootNode() instanceof ConstructionNode)) return Optional.empty();
-            IQTree grandchild = unary.getChild();
-            if (!(grandchild instanceof ExtensionalDataNode)) return Optional.empty();
+        /**
+         * Checks whether the InnerJoin's filter condition contains variable-to-variable
+         * equality (e.g., v1.id = v2.id). Such equalities bind the common key columns
+         * across children, making it safe to merge them into a single access.
+         *
+         * NOTE: this is a heuristic. It returns true if the condition contains "STRICT_EQ2"
+         * or " = " which could match variable-to-constant equality. For safety, the caller
+         * should rely on canMergeSafely to reject cases where non-common keySet positions
+         * have overlapping variables.
+         */
+        private boolean hasVariableEqualityCondition(InnerJoinNode node) {
+            Optional<ImmutableExpression> condition = node.getOptionalFilterCondition();
+            if (!condition.isPresent()) return false;
 
-            ConstructionNode constr = (ConstructionNode) unary.getRootNode();
-            ExtensionalDataNode extData = (ExtensionalDataNode) grandchild;
+            // Check for variable-to-variable equalities.
+            // Ontop represents equality as either "a = b" (infix) or "STRICT_EQ2(a,b)" (function).
+            // We check for STRICT_EQ2 as it only appears in function-based equality.
+            // The " = " heuristic is more permissive but can be relaxed since
+            // canMergeSafely provides the real safety net for keySet conflicts.
+            String exprStr = condition.get().toString();
+            LOGGER.info("SameSourceMerge: join condition: {}", exprStr);
+            return exprStr.contains("STRICT_EQ2") || exprStr.contains(" = ");
+        }
+
+        /**
+         * Validates whether candidates with the same relationDef but DIFFERENT keySets
+         * can be safely merged. Two conditions must hold:
+         * 1. Common positions must map to VARIABLES THAT ARE EQUIVALENT via the join condition
+         *    (e.g., v1.id = v2.id makes v1.id and v2.id equivalent, so merging is safe).
+         *    If they are different variables WITHOUT equality, merging would alias them.
+         * 2. Non-common positions must be disjoint across candidates.
+         */
+        private boolean canMergeSafely(List<MergeCandidate> candidates, InnerJoinNode joinNode) {
+            if (candidates.size() <= 1) return false;
+
+            // Extract variable equality pairs from join condition (e.g., A = C becomes (A, C))
+            Map<Variable, Set<Variable>> equivalenceClasses = buildVariableEquivalenceClasses(joinNode);
+
+            // Find positions that appear in ALL candidates (the "common set")
+            Set<Integer> commonPositions = null;
+            for (MergeCandidate c : candidates) {
+                Set<Integer> posSet = c.extDataNode.getArgumentMap().keySet();
+                if (commonPositions == null) {
+                    commonPositions = new HashSet<>(posSet);
+                } else {
+                    commonPositions.retainAll(posSet);
+                }
+            }
+
+            if (commonPositions == null || commonPositions.isEmpty()) {
+                LOGGER.info("SameSourceMerge: no common positions across candidates, refusing to merge");
+                return false;
+            }
+
+            // Check 1: Common positions must use EQUIVALENT variables in all candidates.
+            // If position P is in commonPositions but maps to A in child 0 and C in child 1,
+            // merging is safe ONLY IF A = C (via join condition).
+            // If they are different variables WITHOUT equality, merging would alias them.
+            Map<Integer, VariableOrGroundTerm> positionToVar = new HashMap<>();
+            for (MergeCandidate c : candidates) {
+                for (Integer pos : commonPositions) {
+                    VariableOrGroundTerm var = c.extDataNode.getArgumentMap().get(pos);
+                    if (positionToVar.containsKey(pos)) {
+                        VariableOrGroundTerm existingVar = positionToVar.get(pos);
+                        if (!existingVar.equals(var)) {
+                            // Different variables at same position - check if they're equivalent
+                            if (!areVariablesEquivalent(existingVar, var, equivalenceClasses)) {
+                                LOGGER.info("SameSourceMerge: common position {} maps to non-equivalent variables, refusing merge", pos);
+                                return false;
+                            }
+                        }
+                    }
+                    positionToVar.put(pos, var);
+                }
+            }
+
+            // Check 2: Non-common positions must be disjoint across candidates.
+            // If position P appears in candidate A and candidate B, and P is NOT
+            // in the common set, it means both candidates select the same column position
+            // for different purposes — merging would alias them incorrectly.
+            Map<Integer, Integer> positionOrigin = new HashMap<>();
+            for (int i = 0; i < candidates.size(); i++) {
+                for (Integer pos : candidates.get(i).extDataNode.getArgumentMap().keySet()) {
+                    if (commonPositions.contains(pos)) continue;
+                    if (positionOrigin.containsKey(pos)) {
+                        LOGGER.info("SameSourceMerge: position {} appears in multiple candidates (non-common), refusing merge", pos);
+                        return false;
+                    }
+                    positionOrigin.put(pos, i);
+                }
+            }
+
+            return true;
+        }
+
+        /**
+         * Builds equivalence classes of variables from the join condition.
+         * For example, if join condition is "A = C AND B = D", returns:
+         * {A → {A, C}, C → {A, C}, B → {B, D}, D → {B, D}}
+         */
+        private Map<Variable, Set<Variable>> buildVariableEquivalenceClasses(InnerJoinNode joinNode) {
+            Map<Variable, Set<Variable>> equivalenceClasses = new HashMap<>();
+            Optional<ImmutableExpression> condition = joinNode.getOptionalFilterCondition();
+            if (!condition.isPresent()) return equivalenceClasses;
+
+            String exprStr = condition.get().toString();
+            // Look for STRICT_EQ2(a, b) patterns
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("STRICT_EQ2\\(([^,]+),([^)]+)\\)");
+            java.util.regex.Matcher matcher = pattern.matcher(exprStr);
+            while (matcher.find()) {
+                String var1Str = matcher.group(1).trim();
+                String var2Str = matcher.group(2).trim();
+                Variable var1 = findVariableByName(var1Str);
+                Variable var2 = findVariableByName(var2Str);
+                if (var1 != null && var2 != null) {
+                    equivalenceClasses.computeIfAbsent(var1, k -> new HashSet<>()).add(var2);
+                    equivalenceClasses.computeIfAbsent(var2, k -> new HashSet<>()).add(var1);
+                }
+            }
+            return equivalenceClasses;
+        }
+
+        private Variable findVariableByName(String name) {
+            // Variables in expression strings look like: ?v0, v0, ?A, etc.
+            String varName = name.startsWith("?") ? name.substring(1) : name;
+            return termFactory.getVariable(varName);
+        }
+
+        private boolean areVariablesEquivalent(VariableOrGroundTerm v1, VariableOrGroundTerm v2,
+                                               Map<Variable, Set<Variable>> equivalenceClasses) {
+            if (v1.equals(v2)) return true;
+            if (!(v1 instanceof Variable) || !(v2 instanceof Variable)) return false;
+            Set<Variable> eq1 = equivalenceClasses.get(v1);
+            if (eq1 != null && eq1.contains(v2)) return true;
+            Set<Variable> eq2 = equivalenceClasses.get(v2);
+            if (eq2 != null && eq2.contains(v1)) return true;
+            return false;
+        }
+
+        /**
+         * Attempts a relaxed merge where candidates are grouped by relationDef only.
+         * Each group passes through canMergeSafely before merging.
+         */
+        private Optional<IQTree> tryRelaxedMerge(Map<RelationDefinition, List<MergeCandidate>> relaxedGroups, InnerJoinNode joinNode) {
+            List<IQTree> mergedChildren = new ArrayList<>();
+            boolean anyMerged = false;
+
+            for (List<MergeCandidate> group : relaxedGroups.values()) {
+                if (group.size() > 1 && canMergeSafely(group, joinNode)) {
+                    mergedChildren.add(mergeGroup(group));
+                    anyMerged = true;
+                } else {
+                    for (MergeCandidate c : group) {
+                        mergedChildren.add(c.tree);
+                    }
+                }
+            }
+
+            if (!anyMerged) return Optional.empty();
+
+            if (mergedChildren.size() == 1) {
+                return Optional.of(mergedChildren.get(0));
+            }
+            return Optional.of(iqFactory.createNaryIQTree(
+                    iqFactory.createInnerJoinNode(),
+                    ImmutableList.copyOf(mergedChildren)));
+        }
+
+        private Optional<MergeCandidate> extractCandidate(IQTree child) {
+            LOGGER.info("SameSourceMerge: extractCandidate called for child type: {}", child.getClass().getSimpleName());
+
+            ConstructionNode constr;
+            ExtensionalDataNode extData;
+
+            if (child instanceof UnaryIQTree) {
+                UnaryIQTree unary = (UnaryIQTree) child;
+                if (unary.getRootNode() instanceof ConstructionNode) {
+                    IQTree grandchild = unary.getChild();
+                    if (grandchild instanceof ExtensionalDataNode) {
+                        constr = (ConstructionNode) unary.getRootNode();
+                        extData = (ExtensionalDataNode) grandchild;
+                    } else {
+                        LOGGER.info("SameSourceMerge: grandchild is not ExtData: {}", grandchild.getClass().getSimpleName());
+                        return Optional.empty();
+                    }
+                } else {
+                    LOGGER.info("SameSourceMerge: rootNode is not ConstructionNode: {}", unary.getRootNode().getClass().getSimpleName());
+                    return Optional.empty();
+                }
+            } else if (child instanceof ExtensionalDataNode) {
+                // ConstructionNode was stripped by InnerJoinNormalizer (empty substitution)
+                // Treat as a construction with empty substitution
+                extData = (ExtensionalDataNode) child;
+                LOGGER.info("SameSourceMerge: child is direct ExtData - creating empty ConstructionNode");
+                // Create a dummy ConstructionNode with empty substitution - variables come from extData's argument map
+                ImmutableMap<Integer, ? extends VariableOrGroundTerm> args = extData.getArgumentMap();
+                ImmutableSet<Variable> vars = args.values().stream()
+                        .filter(v -> v instanceof Variable)
+                        .map(v -> (Variable) v)
+                        .collect(ImmutableCollectors.toSet());
+                constr = iqFactory.createConstructionNode(vars, substitutionFactory.getSubstitution());
+            } else {
+                LOGGER.info("SameSourceMerge: child is neither UnaryIQTree nor ExtData: {}", child.getClass().getSimpleName());
+                return Optional.empty();
+            }
 
             return Optional.of(new MergeCandidate(child, constr, extData));
         }
 
         private IQTree mergeGroup(List<MergeCandidate> candidates) {
             MergeCandidate first = candidates.get(0);
-            ExtensionalDataNode firstExtData = first.extDataNode;
-            ImmutableMap<Integer, ? extends VariableOrGroundTerm> mergedArgs = firstExtData.getArgumentMap();
 
-            Substitution<ImmutableTerm> mergedSub = mergeSubstitutions(candidates);
+            // Build merged argument map: first-seen variable for each position.
+            // Position 0 (id) is shared by all children - take the first child's variable.
+            // Other positions (1, 2, 4, 6, 7, 8, 9) appear in different children
+            // and are captured by putIfAbsent.
+            Map<Integer, VariableOrGroundTerm> mergedArgsMap = new LinkedHashMap<>();
+            for (MergeCandidate c : candidates) {
+                for (Map.Entry<Integer, ? extends VariableOrGroundTerm> entry
+                        : c.extDataNode.getArgumentMap().entrySet()) {
+                    mergedArgsMap.putIfAbsent(entry.getKey(), entry.getValue());
+                }
+            }
+            ImmutableMap<Integer, VariableOrGroundTerm> mergedArgs = ImmutableMap.copyOf(mergedArgsMap);
+
+            // Use the MERGED args as reference so remapToReferenceArgs can resolve
+            // positions that exist in later children but not in the first child
+            Substitution<ImmutableTerm> mergedSub = mergeSubstitutions(candidates, mergedArgs);
 
             ExtensionalDataNode mergedExtData = iqFactory.createExtensionalDataNode(
-                    firstExtData.getRelationDefinition(), mergedArgs);
+                    first.extDataNode.getRelationDefinition(), mergedArgs);
 
-            ImmutableSet<Variable> projectedVars = candidates.stream()
-                    .flatMap(c -> c.constructionNode.getVariables().stream())
-                    .collect(ImmutableCollectors.toSet());
-            ConstructionNode mergedConstr = iqFactory.createConstructionNode(projectedVars, mergedSub);
+            // Projection: all mergedExtData argument variables (pass-through)
+            // plus variables introduced by the substitution (aliases)
+            ImmutableSet.Builder<Variable> projectedBuilder = ImmutableSet.builder();
+            for (VariableOrGroundTerm v : mergedArgs.values()) {
+                if (v instanceof Variable) {
+                    projectedBuilder.add((Variable) v);
+                }
+            }
+            projectedBuilder.addAll(mergedSub.getDomain());
+            ConstructionNode mergedConstr = iqFactory.createConstructionNode(projectedBuilder.build(), mergedSub);
 
             return iqFactory.createUnaryIQTree(mergedConstr, mergedExtData);
         }
 
         private Substitution<ImmutableTerm> mergeSubstitutions(List<MergeCandidate> candidates) {
+            return mergeSubstitutions(candidates,
+                    ImmutableMap.copyOf(candidates.get(0).extDataNode.getArgumentMap()));
+        }
+
+        private Substitution<ImmutableTerm> mergeSubstitutions(List<MergeCandidate> candidates,
+                                                                ImmutableMap<Integer, ? extends VariableOrGroundTerm> referenceArgs) {
             MergeCandidate first = candidates.get(0);
-            ImmutableMap<Integer, ? extends VariableOrGroundTerm> referenceArgs = first.extDataNode.getArgumentMap();
             Substitution<ImmutableTerm> merged = first.constructionNode.getSubstitution();
 
             for (int i = 1; i < candidates.size(); i++) {
