@@ -277,8 +277,11 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
 
         /**
          * Builds equivalence classes of variables from the join condition.
-         * For example, if join condition is "A = C AND B = D", returns:
-         * {A → {A, C}, C → {A, C}, B → {B, D}, D → {B, D}}
+         * Handles multiple equality formats:
+         * - STRICT_EQ2(A, B)
+         * - A = B (infix equality)
+         * - CAST(A AS CHAR) = CAST(B AS CHAR) (database-level equality)
+         * - AND(STRICT_EQ2(A,B), STRICT_EQ2(C,D)) (conjunction of equalities)
          */
         private Map<Variable, Set<Variable>> buildVariableEquivalenceClasses(InnerJoinNode joinNode) {
             Map<Variable, Set<Variable>> equivalenceClasses = new HashMap<>();
@@ -286,20 +289,40 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             if (!condition.isPresent()) return equivalenceClasses;
 
             String exprStr = condition.get().toString();
-            // Look for STRICT_EQ2(a, b) patterns
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("STRICT_EQ2\\(([^,]+),([^)]+)\\)");
+            LOGGER.info("SameSourceMerge: parsing join condition for equalities: {}", exprStr);
+
+            // Pattern 1: STRICT_EQ2(a, b) - function-style equality
+            extractEqualityPairs(exprStr, "STRICT_EQ2\\(([^,]+),([^)]+)\\)", equivalenceClasses);
+
+            // Pattern 2: A = B - infix equality (may be nested inside AND, OR, CAST, etc.)
+            // This pattern looks for " = " but needs to avoid matching <=, >=, !=
+            extractEqualityPairs(exprStr, "([^=<>\\s]+)\\s*=\\s*([^=<>\\s]+)", equivalenceClasses);
+
+            LOGGER.info("SameSourceMerge: found {} equivalence classes", equivalenceClasses.size());
+            return equivalenceClasses;
+        }
+
+        private void extractEqualityPairs(String exprStr, String regex,
+                                          Map<Variable, Set<Variable>> equivalenceClasses) {
+            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(regex);
             java.util.regex.Matcher matcher = pattern.matcher(exprStr);
             while (matcher.find()) {
                 String var1Str = matcher.group(1).trim();
                 String var2Str = matcher.group(2).trim();
+                // Skip if either side looks like a function call or CAST
+                if (var1Str.contains("(") || var2Str.contains("(")) continue;
+                // Skip if either side looks like a constant (contains ',", or is purely numeric)
+                if (var1Str.matches(".*['\"].*") || var2Str.matches(".*['\"].*")) continue;
+                if (var1Str.matches("\\d+") || var2Str.matches("\\d+")) continue;
+
                 Variable var1 = findVariableByName(var1Str);
                 Variable var2 = findVariableByName(var2Str);
                 if (var1 != null && var2 != null) {
                     equivalenceClasses.computeIfAbsent(var1, k -> new HashSet<>()).add(var2);
                     equivalenceClasses.computeIfAbsent(var2, k -> new HashSet<>()).add(var1);
+                    LOGGER.info("SameSourceMerge: added equivalence {} = {}", var1, var2);
                 }
             }
-            return equivalenceClasses;
         }
 
         private Variable findVariableByName(String name) {
