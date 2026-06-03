@@ -260,11 +260,23 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                     if (positionToVar.containsKey(pos)) {
                         VariableOrGroundTerm existingVar = positionToVar.get(pos);
                         if (!existingVar.equals(var)) {
-                            // Different variables at same position - check if they're equivalent
-                            if (!areVariablesEquivalent(existingVar, var, equivalenceClasses)) {
-                                LOGGER.info("SameSourceMerge: common position {} maps to non-equivalent variables, refusing merge", pos);
-                                return false;
+                            // Different variables at same position - check if they're equivalent.
+                            // If either variable is in the equivalence classes (from join equality conditions),
+                            // they must be equivalent. If neither is in any equivalence class, they are
+                            // non-key columns (e.g. filter columns like is_delete) and can be safely
+                            // resolved by putIfAbsent during merge.
+                            boolean existingInEq = existingVar instanceof Variable 
+                                    && equivalenceClasses.containsKey((Variable) existingVar);
+                            boolean currentInEq = var instanceof Variable 
+                                    && equivalenceClasses.containsKey((Variable) var);
+
+                            if (existingInEq || currentInEq) {
+                                if (!areVariablesEquivalent(existingVar, var, equivalenceClasses)) {
+                                    LOGGER.info("SameSourceMerge: common position {} maps to non-equivalent variables, refusing merge", pos);
+                                    return false;
+                                }
                             }
+                            // else: both variables are non-key (no join equality), skip equivalence check
                         }
                     }
                     positionToVar.put(pos, var);
