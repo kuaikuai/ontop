@@ -17,9 +17,16 @@ public interface OntopOptimizationSettings extends OntopModelSettings {
         }
     }
 
+    default boolean isSameSourceMergeEnabled() {
+        return getProperty(SAME_SOURCE_MERGE_ENABLED)
+                .map(Boolean::parseBoolean)
+                .orElse(true);
+    }
+
     //-------
     // Keys
     //-------
 
     String MAX_NB_CHILDREN_LIFTING_DB_FS = "ontop.maxNbChildrenLiftingDBFS";
+    String SAME_SOURCE_MERGE_ENABLED = "ontop.sameSourceMerge.enabled";
 }

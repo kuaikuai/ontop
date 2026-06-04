@@ -8,6 +8,7 @@ import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
 import it.unibz.inf.ontop.exception.MinorOntopInternalBugException;
+import it.unibz.inf.ontop.injection.OntopOptimizationSettings;
 import it.unibz.inf.ontop.injection.IntermediateQueryFactory;
 import it.unibz.inf.ontop.iq.IQTree;
 import it.unibz.inf.ontop.iq.NaryIQTree;
@@ -44,23 +45,26 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
     private final IQTreeTools iqTreeTools;
     private final TermFactory termFactory;
     private final SubstitutionFactory substitutionFactory;
+    private final boolean enabled;
 
     @Inject
     private SameSourceMergeOptimizer(IntermediateQueryFactory iqFactory,
                                      IQTreeTools iqTreeTools,
                                      TermFactory termFactory,
-                                     SubstitutionFactory substitutionFactory) {
+                                     SubstitutionFactory substitutionFactory,
+                                     OntopOptimizationSettings settings) {
         super(iqFactory);
-        LOGGER.info("SameSourceMergeOptimizer loaded");
         this.iqTreeTools = iqTreeTools;
         this.termFactory = termFactory;
         this.substitutionFactory = substitutionFactory;
+        this.enabled = settings.isSameSourceMergeEnabled();
+        LOGGER.info("SameSourceMergeOptimizer loaded (enabled={})", enabled);
     }
 
     @Override
     protected IQTreeVariableGeneratorTransformer getTransformer() {
         return IQTreeVariableGeneratorTransformer.of(
-                vg -> new SameSourceMergeTransformer(vg, iqFactory, iqTreeTools, termFactory, substitutionFactory));
+                vg -> new SameSourceMergeTransformer(vg, enabled, iqFactory, iqTreeTools, termFactory, substitutionFactory));
     }
 
     private static class SameSourceMergeTransformer
@@ -70,8 +74,10 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
         private final TermFactory termFactory;
         private final SubstitutionFactory substitutionFactory;
         private final VariableGenerator variableGenerator;
+        private final boolean enabled;
 
         SameSourceMergeTransformer(VariableGenerator vg,
+                                   boolean enabled,
                                    IntermediateQueryFactory iqFactory,
                                    IQTreeTools iqTreeTools,
                                    TermFactory termFactory,
@@ -81,11 +87,14 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             this.termFactory = termFactory;
             this.substitutionFactory = substitutionFactory;
             this.variableGenerator = vg;
+            this.enabled = enabled;
         }
 
         @Override
         public IQTree transformInnerJoin(NaryIQTree tree, InnerJoinNode node,
                                           ImmutableList<IQTree> children) {
+            if (!enabled)
+                return iqFactory.createNaryIQTree(node, children);
             LOGGER.debug("SameSourceMerge: transformInnerJoin called with {} children", children.size());
             Optional<IQTree> merged = tryMergeSameSourceNodes(node, children);
             if (merged.isPresent()) {
