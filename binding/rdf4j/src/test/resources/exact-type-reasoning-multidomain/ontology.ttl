@@ -1,0 +1,24 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix : <http://example.org/ontology#> .
+
+:material a owl:Class .
+:bom_item a owl:Class .
+:material_mould_output a owl:Class .
+:material_equipment_capability a owl:Class .
+:line_side_stock a owl:Class .
+
+:material_code a owl:DatatypeProperty .
+:material_code rdfs:domain :material .
+
+:material_code a owl:DatatypeProperty .
+:material_code rdfs:domain :bom_item .
+
+:material_code a owl:DatatypeProperty .
+:material_code rdfs:domain :material_mould_output .
+
+:material_code a owl:DatatypeProperty .
+:material_code rdfs:domain :material_equipment_capability .
+
+:material_code a owl:DatatypeProperty .
+:material_code rdfs:domain :line_side_stock .

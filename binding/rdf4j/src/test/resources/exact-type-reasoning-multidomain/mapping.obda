@@ -1,0 +1,25 @@
+[PrefixDeclaration]
+: http://example.org/ontology#
+rdfs: http://www.w3.org/2000/01/rdf-schema#
+
+[MappingDeclaration] @collection [[
+mappingId	materialMapping
+target		:material/{id} a :material ; :material_code {material_code} .
+source		select id, material_code from material
+
+mappingId	bomItemMapping
+target		:bom_item/{id} a :bom_item ; :material_code {material_code} .
+source		select id, material_code from bom_item
+
+mappingId	mouldOutputMapping
+target		:material_mould_output/{id} a :material_mould_output ; :material_code {material_code} .
+source		select id, material_code from material_mould_output
+
+mappingId	equipmentCapabilityMapping
+target		:material_equipment_capability/{id} a :material_equipment_capability ; :material_code {material_code} .
+source		select id, material_code from material_equipment_capability
+
+mappingId	lineSideStockMapping
+target		:line_side_stock/{id} a :line_side_stock ; :material_code {material_code} .
+source		select id, material_code from line_side_stock
+]]
