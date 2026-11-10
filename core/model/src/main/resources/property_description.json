@@ -111,6 +111,10 @@
     "type": "Boolean",
     "description": "Since 4.2.0. Default value: `true`. If `false`, no additional facts on superclasses for rdfs:domain/range are integrated in addition to the explicit ontology facts."
   },
+  "ontop.reasoning.type": {
+    "type": "Enum",
+    "description": "Default value: `full`. If set to `exact`, `rdf:type` queries only match explicitly declared types: TBox saturation, `rdfs:domain`/`rdfs:range` inference and subclass inference are not used to add class instances. Property (sub-property) reasoning is preserved."
+  },
   "ontop.disableLimitOptimization": {
     "type": "Boolean",
     "description": "Since 5.0.0. Default value: `false`. If `true`, most limit optimizations won't be applied."
