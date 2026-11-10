@@ -20,30 +20,30 @@ public class TypeReasoningModeSettingsTest {
 
     @Test
     public void testDefaultIsFull() {
-        assertEquals(OntopMappingSettings.TypeReasoningMode.FULL,
+        assertEquals(OntopModelSettings.TypeReasoningMode.FULL,
                 settings(new Properties()).getTypeReasoningMode());
     }
 
     @Test
     public void testExact() {
         Properties properties = new Properties();
-        properties.setProperty(OntopMappingSettings.TYPE_REASONING_MODE, "exact");
-        assertEquals(OntopMappingSettings.TypeReasoningMode.EXACT,
+        properties.setProperty(OntopModelSettings.TYPE_REASONING_MODE, "exact");
+        assertEquals(OntopModelSettings.TypeReasoningMode.EXACT,
                 settings(properties).getTypeReasoningMode());
     }
 
     @Test
     public void testFull() {
         Properties properties = new Properties();
-        properties.setProperty(OntopMappingSettings.TYPE_REASONING_MODE, "full");
-        assertEquals(OntopMappingSettings.TypeReasoningMode.FULL,
+        properties.setProperty(OntopModelSettings.TYPE_REASONING_MODE, "full");
+        assertEquals(OntopModelSettings.TypeReasoningMode.FULL,
                 settings(properties).getTypeReasoningMode());
     }
 
     @Test
     public void testInvalidValueIsRejected() {
         Properties properties = new Properties();
-        properties.setProperty(OntopMappingSettings.TYPE_REASONING_MODE, "bogus");
+        properties.setProperty(OntopModelSettings.TYPE_REASONING_MODE, "bogus");
         assertThrows(InvalidOntopConfigurationException.class,
                 () -> settings(properties).getTypeReasoningMode());
     }

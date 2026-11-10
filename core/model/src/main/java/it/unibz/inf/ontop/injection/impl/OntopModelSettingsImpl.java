@@ -117,6 +117,23 @@ public class OntopModelSettingsImpl implements OntopModelSettings {
         return getRequiredBoolean(AUTHORIZATION);
     }
 
+    @Override
+    public TypeReasoningMode getTypeReasoningMode() {
+        return getProperty(TYPE_REASONING_MODE)
+                .map(String::trim)
+                .map(OntopModelSettingsImpl::parseTypeReasoningMode)
+                .orElse(TypeReasoningMode.FULL);
+    }
+
+    private static TypeReasoningMode parseTypeReasoningMode(String value) {
+        if ("full".equalsIgnoreCase(value))
+            return TypeReasoningMode.FULL;
+        if ("exact".equalsIgnoreCase(value))
+            return TypeReasoningMode.EXACT;
+        throw new InvalidOntopConfigurationException(
+                "Invalid value for " + TYPE_REASONING_MODE + ": '" + value + "' (expected 'full' or 'exact')");
+    }
+
     /**
      * Returns the boolean value of the given key.
      */

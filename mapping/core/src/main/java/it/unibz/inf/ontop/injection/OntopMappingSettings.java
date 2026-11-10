@@ -3,10 +3,6 @@ package it.unibz.inf.ontop.injection;
 
 public interface OntopMappingSettings extends OntopKGQuerySettings {
 
-    enum TypeReasoningMode { FULL, EXACT }
-
-    TypeReasoningMode getTypeReasoningMode();
-
     boolean isOntologyAnnotationQueryingEnabled();
 
     /**
@@ -63,7 +59,6 @@ public interface OntopMappingSettings extends OntopKGQuerySettings {
     String ENABLE_FACT_EXTRACTION_WITH_TBOX = "ontop.enableFactExtractionWithTBox";
     String INFER_SUPER_CLASSES_OF_DOMAIN_RANGE = "ontop.querySuperClassesOfDomainRange";
     String WRAP_MAPPING_VALUES_NODES_IN_LENSES = "ontop.wrapMappingValuesNodesInLenses";
-    String TYPE_REASONING_MODE = "ontop.reasoning.type";
 
     /**
      * Options to specify base IRI.

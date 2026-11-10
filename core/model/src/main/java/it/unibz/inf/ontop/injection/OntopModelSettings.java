@@ -7,6 +7,9 @@ import java.util.Optional;
  */
 public interface OntopModelSettings {
 
+    enum TypeReasoningMode { FULL, EXACT }
+
+    TypeReasoningMode getTypeReasoningMode();
 
     CardinalityPreservationMode getCardinalityPreservationMode();
 
@@ -55,6 +58,7 @@ public interface OntopModelSettings {
     String TEST_MODE = "ontop.testMode";
     String DISABLE_LIMIT_OPTIMIZATION = "ontop.disableLimitOptimization";
     String AUTHORIZATION = "ontop.authorization";
+    String TYPE_REASONING_MODE = "ontop.reasoning.type";
 
     String INCLUDE_MYSQL_DORIS = "ontop.mysql.doris";
 }

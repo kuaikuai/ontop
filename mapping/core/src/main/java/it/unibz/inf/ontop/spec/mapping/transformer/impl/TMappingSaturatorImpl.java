@@ -28,6 +28,7 @@ import it.unibz.inf.ontop.evaluator.TermNullabilityEvaluator;
 import it.unibz.inf.ontop.exception.MinorOntopInternalBugException;
 import it.unibz.inf.ontop.injection.CoreSingletons;
 import it.unibz.inf.ontop.injection.OntopMappingSettings;
+import it.unibz.inf.ontop.injection.OntopModelSettings;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.impl.IQTreeTools;
 import it.unibz.inf.ontop.iq.node.ConstructionNode;
@@ -137,7 +138,7 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
                 .collect(ImmutableCollectors.toMap());
 
         ImmutableMap<MappingAssertionIndex, MappingAssertion> effectiveSaturated =
-                settings.getTypeReasoningMode() == OntopMappingSettings.TypeReasoningMode.EXACT
+                settings.getTypeReasoningMode() == OntopModelSettings.TypeReasoningMode.EXACT
                         ? dropInferredClassMappings(saturated)
                         : saturated;
 
