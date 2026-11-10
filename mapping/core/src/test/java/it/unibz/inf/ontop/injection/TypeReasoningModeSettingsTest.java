@@ -25,6 +25,16 @@ public class TypeReasoningModeSettingsTest {
     }
 
     @Test
+    public void testDefaultIsFullWhenPropertyAbsent() {
+        assertEquals(OntopModelSettings.TypeReasoningMode.FULL,
+                OntopModelConfiguration.defaultBuilder()
+                        .enableTestMode()
+                        .build()
+                        .getSettings()
+                        .getTypeReasoningMode());
+    }
+
+    @Test
     public void testExact() {
         Properties properties = new Properties();
         properties.setProperty(OntopModelSettings.TYPE_REASONING_MODE, "exact");

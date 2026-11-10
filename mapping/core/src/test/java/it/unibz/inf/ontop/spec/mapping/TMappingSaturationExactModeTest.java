@@ -7,7 +7,7 @@ import com.google.inject.Injector;
 import it.unibz.inf.ontop.dbschema.NamedRelationDefinition;
 import it.unibz.inf.ontop.dbschema.impl.OfflineMetadataProviderBuilder;
 import it.unibz.inf.ontop.injection.OntopMappingConfiguration;
-import it.unibz.inf.ontop.injection.OntopMappingSettings;
+import it.unibz.inf.ontop.injection.OntopModelSettings;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.node.ConstructionNode;
 import it.unibz.inf.ontop.iq.node.ExtensionalDataNode;
@@ -148,7 +148,7 @@ public class TMappingSaturationExactModeTest {
 
     private static MappingSaturator createSaturator(String mode) {
         Properties properties = new Properties();
-        properties.setProperty(OntopMappingSettings.TYPE_REASONING_MODE, mode);
+        properties.setProperty(OntopModelSettings.TYPE_REASONING_MODE, mode);
         Injector injector = OntopMappingConfiguration.defaultBuilder()
                 .enableTestMode()
                 .properties(properties)

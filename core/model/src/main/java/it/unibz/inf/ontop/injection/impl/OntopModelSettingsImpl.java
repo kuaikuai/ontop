@@ -19,6 +19,7 @@ public class OntopModelSettingsImpl implements OntopModelSettings {
     private final CardinalityPreservationMode cardinalityMode;
     private final boolean testMode;
     private final boolean disableLimitOptimization;
+    private final TypeReasoningMode typeReasoningMode;
 
     /**
      * Beware: immutable class!
@@ -41,6 +42,7 @@ public class OntopModelSettingsImpl implements OntopModelSettings {
         cardinalityMode = extractCardinalityMode(properties);
         testMode = extractBoolean(properties, OntopModelSettings.TEST_MODE);
         disableLimitOptimization = extractBoolean(properties, OntopModelSettings.DISABLE_LIMIT_OPTIMIZATION);
+        typeReasoningMode = extractTypeReasoningMode(properties);
     }
 
     private static CardinalityPreservationMode extractCardinalityMode(Properties properties)
@@ -119,19 +121,26 @@ public class OntopModelSettingsImpl implements OntopModelSettings {
 
     @Override
     public TypeReasoningMode getTypeReasoningMode() {
-        return getProperty(TYPE_REASONING_MODE)
-                .map(String::trim)
-                .map(OntopModelSettingsImpl::parseTypeReasoningMode)
-                .orElse(TypeReasoningMode.FULL);
+        return typeReasoningMode;
     }
 
-    private static TypeReasoningMode parseTypeReasoningMode(String value) {
-        if ("full".equalsIgnoreCase(value))
+    private static TypeReasoningMode extractTypeReasoningMode(Properties properties) {
+        Object value = properties.get(TYPE_REASONING_MODE);
+        if (value == null)
             return TypeReasoningMode.FULL;
-        if ("exact".equalsIgnoreCase(value))
-            return TypeReasoningMode.EXACT;
+        if (value instanceof TypeReasoningMode)
+            return (TypeReasoningMode) value;
+        if (value instanceof String) {
+            String stringValue = ((String) value).trim();
+            if ("full".equalsIgnoreCase(stringValue))
+                return TypeReasoningMode.FULL;
+            if ("exact".equalsIgnoreCase(stringValue))
+                return TypeReasoningMode.EXACT;
+            throw new InvalidOntopConfigurationException(
+                    "Invalid value for " + TYPE_REASONING_MODE + ": '" + stringValue + "' (expected 'full' or 'exact')");
+        }
         throw new InvalidOntopConfigurationException(
-                "Invalid value for " + TYPE_REASONING_MODE + ": '" + value + "' (expected 'full' or 'exact')");
+                "A string or TypeReasoningMode was expected for " + TYPE_REASONING_MODE + ": " + value);
     }
 
     /**
