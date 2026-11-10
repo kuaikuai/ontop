@@ -766,9 +766,44 @@ git commit -m "docs: add exact type reasoning implementation plan"
 
 ---
 
+## Task 5: Multi-domain / property-domain regression (design §5.2)
+
+**Files (all new):**
+- `binding/rdf4j/src/test/resources/exact-type-reasoning-domain/data.sql`
+- `binding/rdf4j/src/test/resources/exact-type-reasoning-domain/mapping.obda`
+- `binding/rdf4j/src/test/resources/exact-type-reasoning-domain/ontology.ttl`
+- `binding/rdf4j/src/test/resources/exact-type-reasoning-domain/full.properties`
+- `binding/rdf4j/src/test/resources/exact-type-reasoning-domain/exact.properties`
+- `binding/rdf4j/src/test/java/it/unibz/inf/ontop/rdf4j/repository/ExactTypeReasoningDomainFullTest.java`
+- `binding/rdf4j/src/test/java/it/unibz/inf/ontop/rdf4j/repository/ExactTypeReasoningDomainExactTest.java`
+
+Purpose: reproduce the original symptom shape — a data property `:code` with `rdfs:domain :A`, mapped on two different tables with different subject templates, so `full` produces a `UNION` of the literal `a:A` table and the domain-derived table, while `exact` leaves a single table. This is the §2.4 diagnostic gate.
+
+Fixtures:
+- `data.sql`: `t1(id, code)` values `(1,'c1'),(2,'c2')`; `t2(id, code)` values `(3,'c3'),(4,'c4')`.
+- `mapping.obda`: t1 → `:a/{id} a :A ; :code {code} .`; t2 → `:b/{id} :code {code} .`.
+- `ontology.ttl`: `:A a rdfs:Class .` and `:code a owl:DatatypeProperty ; rdfs:domain :A .`.
+- `full.properties`: `ontop.reasoning.type=full`; `exact.properties`: `ontop.reasoning.type=exact`.
+
+Expected:
+- full: `?v a :A` → `{a/1, a/2, b/3, b/4}` and reformulated SQL contains `union`.
+- exact: `?v a :A` → `{a/1, a/2}` and reformulated SQL contains no `union`.
+
+Verified result: both pass. This confirms the original union is caused by TBox saturation (domain-derived class mappings), not by the rewrite layer; §2.5 is not required for this scenario.
+
+Commit:
+```bash
+git add binding/rdf4j/src/test/resources/exact-type-reasoning-domain
+git add binding/rdf4j/src/test/java/it/unibz/inf/ontop/rdf4j/repository/ExactTypeReasoningDomainFullTest.java
+git add binding/rdf4j/src/test/java/it/unibz/inf/ontop/rdf4j/repository/ExactTypeReasoningDomainExactTest.java
+git commit -m "test: add multi-domain regression for exact type reasoning"
+```
+
+---
+
 ## Self-Review Notes
 
-- **Spec coverage:** §2.1 → Task 1; §2.2/§2.3/§2.4 → Task 2; §2.4 diagnostics → Task 2 Step 5; §5.1 unit → Tasks 1–2; §5.2 integration → Task 3; §5.3 commands → Tasks 1–4.
+- **Spec coverage:** §2.1 → Task 1; §2.2/§2.3/§2.4 → Task 2; §2.4 diagnostics → Task 2 Step 5; §5.1 unit → Tasks 1–2; §5.2 integration → Tasks 3 & 5; §5.3 commands → Tasks 1–4.
 - **No `MappingAssertion.inferred` field** is introduced, matching v1.1 design.
 - **Facts/rules preservation** follows from not touching `DefaultMappingTransformer` and only filtering `saturated` class entries; `original` retains literal/fact class assertions because `effectiveSaturated.containsKey` is false for them.
 - **Property sub-property saturation** is explicitly regression-tested in `testExactKeepsPropertySubPropertySaturation`.

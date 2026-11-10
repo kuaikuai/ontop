@@ -1,0 +1,8 @@
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix : <http://example.org/ontology#> .
+
+:A a rdfs:Class .
+
+:code a owl:DatatypeProperty ;
+    rdfs:domain :A .

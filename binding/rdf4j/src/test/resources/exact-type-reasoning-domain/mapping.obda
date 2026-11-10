@@ -1,0 +1,13 @@
+[PrefixDeclaration]
+: http://example.org/ontology#
+rdfs: http://www.w3.org/2000/01/rdf-schema#
+
+[MappingDeclaration] @collection [[
+mappingId	aMapping
+target		:a/{id} a :A ; :code {code} .
+source		select id, code from t1
+
+mappingId	bMapping
+target		:b/{id} :code {code} .
+source		select id, code from t2
+]]
