@@ -74,4 +74,15 @@ class OntopMappingSettingsImpl extends OntopKGQuerySettingsImpl implements Ontop
     public boolean isValuesNodesWrapInLensesInMappingEnabled() {
         return getRequiredBoolean(OntopMappingSettings.WRAP_MAPPING_VALUES_NODES_IN_LENSES);
     }
+
+    @Override
+    public TypeReasoningMode getTypeReasoningMode() {
+        String value = getRequiredProperty(TYPE_REASONING_MODE).trim();
+        if ("full".equalsIgnoreCase(value))
+            return TypeReasoningMode.FULL;
+        if ("exact".equalsIgnoreCase(value))
+            return TypeReasoningMode.EXACT;
+        throw new InvalidOntopConfigurationException(
+                "Invalid value for " + TYPE_REASONING_MODE + ": '" + value + "' (expected 'full' or 'exact')");
+    }
 }
