@@ -27,6 +27,7 @@ import it.unibz.inf.ontop.constraints.impl.ExtensionalDataNodeListContainmentChe
 import it.unibz.inf.ontop.evaluator.TermNullabilityEvaluator;
 import it.unibz.inf.ontop.exception.MinorOntopInternalBugException;
 import it.unibz.inf.ontop.injection.CoreSingletons;
+import it.unibz.inf.ontop.injection.OntopMappingSettings;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.impl.IQTreeTools;
 import it.unibz.inf.ontop.iq.node.ConstructionNode;
@@ -46,6 +47,8 @@ import it.unibz.inf.ontop.spec.ontology.*;
 import it.unibz.inf.ontop.substitution.Substitution;
 import it.unibz.inf.ontop.substitution.SubstitutionFactory;
 import it.unibz.inf.ontop.utils.ImmutableCollectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.*;
 import java.util.function.BiFunction;
@@ -60,6 +63,8 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
 
 	// TODO: the implementation of EXCLUDE ignores equivalent classes / properties
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(TMappingSaturatorImpl.class);
+
     private final TMappingExclusionConfig tMappingExclusionConfig;
 	private final TermFactory termFactory;
     private final MappingCQCOptimizer mappingCqcOptimizer;
@@ -68,13 +73,15 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
     private final SubstitutionFactory substitutionFactory;
     private final IQTreeTools iqTreeTools;
     private final TermNullabilityEvaluator termNullabilityEvaluator;
+    private final OntopMappingSettings settings;
 
     @Inject
 	private TMappingSaturatorImpl(TMappingExclusionConfig tMappingExclusionConfig,
                                   MappingCQCOptimizer mappingCqcOptimizer,
                                   UnionBasedQueryMerger queryMerger,
                                   CoreSingletons coreSingletons,
-                                  TermNullabilityEvaluator termNullabilityEvaluator) {
+                                  TermNullabilityEvaluator termNullabilityEvaluator,
+                                  OntopMappingSettings settings) {
         this.tMappingExclusionConfig = tMappingExclusionConfig;
 		this.termFactory = coreSingletons.getTermFactory();
         this.mappingCqcOptimizer = mappingCqcOptimizer;
@@ -83,6 +90,7 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
         this.substitutionFactory = coreSingletons.getSubstitutionFactory();
         this.iqTreeTools = coreSingletons.getIQTreeTools();
         this.termNullabilityEvaluator = termNullabilityEvaluator;
+        this.settings = settings;
     }
 
     @Override
@@ -128,10 +136,15 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
                         e.getKey().getToIndex(), e.getKey().updateConstructionNodeIri(e.getValue())))
                 .collect(ImmutableCollectors.toMap());
 
+        ImmutableMap<MappingAssertionIndex, MappingAssertion> effectiveSaturated =
+                settings.getTypeReasoningMode() == OntopMappingSettings.TypeReasoningMode.EXACT
+                        ? dropInferredClassMappings(saturated)
+                        : saturated;
+
         return Stream.concat(
-                saturated.values().stream(),
+                effectiveSaturated.values().stream(),
                 original.asMap().entrySet().stream()
-                        .filter(e -> !saturated.containsKey(e.getKey()))
+                        .filter(e -> !effectiveSaturated.containsKey(e.getKey()))
                         .map(e -> e.getValue().stream()
                                         .collect(toMappingAssertion(cqc)))
                         .map(Optional::get))
@@ -271,5 +284,19 @@ public class TMappingSaturatorImpl implements MappingSaturator  {
                     args -> rdfAtomPredicate.updateSPO(args, rdfAtomPredicate.getSubject(args), newIri, rdfAtomPredicate.getObject(args)),
                     false);
         }
+    }
+
+    private static ImmutableMap<MappingAssertionIndex, MappingAssertion> dropInferredClassMappings(
+            ImmutableMap<MappingAssertionIndex, MappingAssertion> saturated) {
+        long dropped = saturated.keySet().stream()
+                .filter(MappingAssertionIndex::isClass)
+                .count();
+        LOGGER.info("Exact type reasoning enabled: dropped {} inferred class mappings", dropped);
+        saturated.keySet().stream()
+                .filter(MappingAssertionIndex::isClass)
+                .forEach(i -> LOGGER.debug("Exact type reasoning: dropped {}", i));
+        return saturated.entrySet().stream()
+                .filter(e -> !e.getKey().isClass())
+                .collect(ImmutableCollectors.toMap());
     }
 }
