@@ -27,6 +27,7 @@ import it.unibz.inf.ontop.constraints.ImmutableCQ;
 import it.unibz.inf.ontop.constraints.ImmutableCQContainmentCheck;
 import it.unibz.inf.ontop.exception.MinorOntopInternalBugException;
 import it.unibz.inf.ontop.injection.CoreSingletons;
+import it.unibz.inf.ontop.injection.OntopModelSettings;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.IQTree;
 import it.unibz.inf.ontop.iq.UnaryIQTree;
@@ -65,8 +66,8 @@ public class TreeWitnessRewriter extends DummyRewriter implements ExistentialQue
     private final SubstitutionFactory substitutionFactory;
 
     @Inject
-	private TreeWitnessRewriter(CoreSingletons coreSingletons) {
-        super(coreSingletons);
+	private TreeWitnessRewriter(CoreSingletons coreSingletons, OntopModelSettings settings) {
+        super(coreSingletons, settings);
         this.substitutionFactory = coreSingletons.getSubstitutionFactory();
     }
 

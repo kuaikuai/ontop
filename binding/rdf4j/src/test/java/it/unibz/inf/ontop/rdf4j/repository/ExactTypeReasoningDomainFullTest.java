@@ -38,4 +38,14 @@ public class ExactTypeReasoningDomainFullTest extends AbstractRDF4JTest {
         assertTrue("full mode should keep the union of literal and domain-derived class mappings:\n" + sql,
                 sql.contains("union"));
     }
+
+    @Test
+    public void testFullWithPropertyAtom() {
+        String query = "SELECT DISTINCT ?v WHERE { ?v a <http://example.org/ontology#A> ; <http://example.org/ontology#code> ?c }";
+        runQueryAndCompare(query, ImmutableSet.of(
+                "http://example.org/ontology#a/1",
+                "http://example.org/ontology#a/2",
+                "http://example.org/ontology#b/3",
+                "http://example.org/ontology#b/4"));
+    }
 }

@@ -36,4 +36,16 @@ public class ExactTypeReasoningDomainExactTest extends AbstractRDF4JTest {
         assertFalse("exact mode should drop the domain-derived class mapping, leaving a single table:\n" + sql,
                 sql.contains("union"));
     }
+
+    @Test
+    public void testExactWithPropertyAtom() {
+        String query = "SELECT DISTINCT ?v WHERE { ?v a <http://example.org/ontology#A> ; <http://example.org/ontology#code> ?c }";
+        runQueryAndCompare(query, ImmutableSet.of(
+                "http://example.org/ontology#a/1",
+                "http://example.org/ontology#a/2"));
+
+        String sql = reformulateIntoNativeQuery(query).toLowerCase();
+        assertFalse("exact mode must not include the domain-derived table:\n" + sql,
+                sql.contains("ontology#b/"));
+    }
 }

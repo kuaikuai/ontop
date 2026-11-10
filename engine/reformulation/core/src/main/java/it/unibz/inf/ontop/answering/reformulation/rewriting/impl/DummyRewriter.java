@@ -29,6 +29,7 @@ import it.unibz.inf.ontop.constraints.HomomorphismFactory;
 import it.unibz.inf.ontop.constraints.LinearInclusionDependencies;
 import it.unibz.inf.ontop.injection.CoreSingletons;
 import it.unibz.inf.ontop.injection.IntermediateQueryFactory;
+import it.unibz.inf.ontop.injection.OntopModelSettings;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.IQTree;
 import it.unibz.inf.ontop.iq.exception.EmptyQueryException;
@@ -54,6 +55,7 @@ import java.util.function.Function;
 public class DummyRewriter implements QueryRewriter {
 
     private LinearInclusionDependencies<RDFAtomPredicate> sigma;
+    private final boolean exactTypeReasoning;
 
     protected final IntermediateQueryFactory iqFactory;
     protected final AtomFactory atomFactory;
@@ -62,12 +64,13 @@ public class DummyRewriter implements QueryRewriter {
     protected final IQTreeTools iqTreeTools;
 
     @Inject
-    protected DummyRewriter(CoreSingletons coreSingletons) {
+    protected DummyRewriter(CoreSingletons coreSingletons, OntopModelSettings settings) {
         this.iqFactory = coreSingletons.getIQFactory();
         this.atomFactory = coreSingletons.getAtomFactory();
         this.termFactory = coreSingletons.getTermFactory();
         this.homomorphismFactory = coreSingletons.getHomomorphismFactory();
         this.iqTreeTools = coreSingletons.getIQTreeTools();
+        this.exactTypeReasoning = settings.getTypeReasoningMode() == OntopModelSettings.TypeReasoningMode.EXACT;
     }
 
 
@@ -83,8 +86,10 @@ public class DummyRewriter implements QueryRewriter {
 
         traverseDAG(reasoner.dataPropertiesDAG(), p -> true, dpe -> getAtom(x, dpe, y), builder);
 
-        // the head will have no existential variables
-        traverseDAG(reasoner.classesDAG(), c -> (c instanceof OClass), c -> getAtom(c, x, () -> y), builder);
+        if (!exactTypeReasoning) {
+            // the head will have no existential variables
+            traverseDAG(reasoner.classesDAG(), c -> (c instanceof OClass), c -> getAtom(c, x, () -> y), builder);
+        }
 
         sigma = builder.build();
     }
