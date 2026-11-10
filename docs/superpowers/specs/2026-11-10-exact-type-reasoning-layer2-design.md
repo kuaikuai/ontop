@@ -191,6 +191,7 @@ SPARQL: ?x a :A ; :code ?y
 
 - 存在性树见证（existential tree witness）中对 domain/range 的进一步展开：本设计只门禁 `DummyRewriter` 的 ABox 依赖；默认 `ontop.existentialReasoning=false`，且当前问题查询不涉及存在性模式。若后续发现 tree witness 路径仍引入 domain/range 类型，另行设计。
 - 本体建模修复（同一属性多 `rdfs:domain`）。本设计不要求改本体，但多 domain 本身违反 OWL 交集语义，建议另作数据治理。
+- 利用 `owl:AllDisjointClasses` / `DisjointClasses` 做空查询或一致性裁剪：本设计不改变 disjointness 的使用；ontop 能加载该公理，但 exact 不会据此消除 union。
 - 修改 full 模式行为。
 
 ## 8. 风险与缓解
