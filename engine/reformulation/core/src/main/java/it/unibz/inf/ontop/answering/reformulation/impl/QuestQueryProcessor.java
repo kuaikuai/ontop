@@ -18,6 +18,10 @@ import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.exception.EmptyQueryException;
 import it.unibz.inf.ontop.iq.optimizer.*;
 import it.unibz.inf.ontop.iq.planner.QueryPlanner;
+import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
+import it.unibz.inf.ontop.query.translation.path.PathQueryContext;
+import it.unibz.inf.ontop.query.translation.path.PathQuerySupport;
+import it.unibz.inf.ontop.query.translation.path.PathQuerySupportImpl;
 import it.unibz.inf.ontop.spec.OBDASpecification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,6 +49,7 @@ public class QuestQueryProcessor implements QueryReformulator {
 	private final QueryLogger.Factory queryLoggerFactory;
 	private final QueryContext.Factory queryContextFactory;
 	private final NodeInGraphOptimizer nodeInGraphOptimizer;
+	private final PathQuerySupport pathQuerySupport;
 
 	@AssistedInject
 	protected QuestQueryProcessor(@Assisted OBDASpecification obdaSpecification,
@@ -58,7 +63,8 @@ public class QuestQueryProcessor implements QueryReformulator {
 								NodeInGraphOptimizer nodeInGraphOptimizer,
 								QueryPlanner queryPlanner,
 								QueryLogger.Factory queryLoggerFactory,
-								QueryContext.Factory queryContextFactory) {
+								QueryContext.Factory queryContextFactory,
+								PathSpecRegistry pathSpecRegistry) {
 		this.kgQueryFactory = kgQueryFactory;
 		this.rewriter = queryRewriter;
 		this.generalOptimizer = generalOptimizer;
@@ -73,6 +79,8 @@ public class QuestQueryProcessor implements QueryReformulator {
 
 		this.inputQueryTranslator = inputQueryTranslator;
 		this.queryCache = queryCache;
+		this.pathQuerySupport = new PathQuerySupportImpl(
+				obdaSpecification.getDBParameters(), pathSpecRegistry);
 	}
 
 	@Override
@@ -90,7 +98,13 @@ public class QuestQueryProcessor implements QueryReformulator {
 
 		try {
 			LOGGER.debug("SPARQL query:\n{}\n", inputQuery.getOriginalString());
-			IQ convertedIQ = inputQuery.translate(inputQueryTranslator);
+			PathQueryContext.set(pathQuerySupport);
+			IQ convertedIQ;
+			try {
+				convertedIQ = inputQuery.translate(inputQueryTranslator);
+			} finally {
+				PathQueryContext.clear();
+			}
 			LOGGER.debug("Parsed query converted into IQ (after normalization):\n{}\n", convertedIQ);
 
 			queryLogger.setSparqlIQ(convertedIQ);

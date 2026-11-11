@@ -3,12 +3,15 @@ package it.unibz.inf.ontop.injection.impl;
 
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Module;
+import com.google.inject.Singleton;
 import it.unibz.inf.ontop.answering.reformulation.QueryCache;
 import it.unibz.inf.ontop.answering.reformulation.QueryReformulator;
 import it.unibz.inf.ontop.answering.reformulation.generation.NativeQueryGenerator;
 import it.unibz.inf.ontop.answering.reformulation.rewriting.ExistentialQueryRewriter;
 import it.unibz.inf.ontop.answering.reformulation.rewriting.QueryRewriter;
 import it.unibz.inf.ontop.answering.reformulation.rewriting.impl.DummyRewriter;
+import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
+import it.unibz.inf.ontop.dbschema.impl.PathSpecRegistryImpl;
 import it.unibz.inf.ontop.injection.OntopReformulationSettings;
 import it.unibz.inf.ontop.injection.ReformulationFactory;
 import it.unibz.inf.ontop.injection.TranslationFactory;
@@ -37,6 +40,8 @@ public class OntopReformulationPostModule extends OntopAbstractModule {
         }
 
         bindFromSettings(QueryCache.class);
+
+        bind(PathSpecRegistry.class).to(PathSpecRegistryImpl.class).in(Singleton.class);
 
         Module reformulationFactoryModule = buildFactory(
                 ImmutableList.of(
