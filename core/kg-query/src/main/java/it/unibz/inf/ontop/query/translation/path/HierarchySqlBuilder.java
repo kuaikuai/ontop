@@ -18,11 +18,11 @@ public class HierarchySqlBuilder {
         StringBuilder sb = new StringBuilder("WITH\n");
 
         sb.append("level_0 AS (\n  SELECT ")
-                .append(iri(self, self.nodeKeyColumn())).append(" AS node_iri, ")
+                .append(self.nodeKeyColumn()).append(" AS node_iri, ")
                 .append(self.parentJoinKeyColumn()).append(" AS next_key, '0' AS depth, ")
-                .append(iri(self, self.nodeKeyColumn())).append(" AS predecessor ")
+                .append(self.nodeKeyColumn()).append(" AS predecessor ")
                 .append("FROM ").append(self.table()).append(" ")
-                .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(seed))
+                .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(self, seed))
                 .append("\n)");
 
         String filterSql = filter.flatMap(TraversalFilter::where)
@@ -31,7 +31,7 @@ public class HierarchySqlBuilder {
 
         for (int k = 1; k <= maxDepth; k++) {
             sb.append(",\nlevel_").append(k).append(" AS (\n  SELECT ")
-                    .append(iri(self, "p." + self.nodeKeyColumn())).append(" AS node_iri, ")
+                    .append("p.").append(self.nodeKeyColumn()).append(" AS node_iri, ")
                     .append("p.").append(self.parentJoinKeyColumn()).append(" AS next_key, ")
                     .append("'").append(k).append("' AS depth, l.node_iri AS predecessor ")
                     .append("FROM ").append(self.table()).append(" p ")
@@ -48,15 +48,21 @@ public class HierarchySqlBuilder {
         return sb.toString();
     }
 
-    private String iri(PathSpec.Self self, String nodeKeyExpression) {
-        return "CONCAT('', " + nodeKeyExpression + ")";
-    }
-
-    private String nodeKeyLiteral(SeedSource seed) {
+    private String nodeKeyLiteral(PathSpec.Self self, SeedSource seed) {
         if (!(seed instanceof SeedSource.Constant))
             throw new IllegalArgumentException("Phase 1 supports constant seed only");
         String iri = ((SeedSource.Constant) seed).iri();
         String key = iri.substring(iri.lastIndexOf('/') + 1);
-        return key;
+        return isNumericType(self.nodeKeyType())
+                ? key
+                : "'" + key.replace("'", "''") + "'";
+    }
+
+    private boolean isNumericType(String type) {
+        if (type == null)
+            return false;
+        String upper = type.toUpperCase();
+        return upper.contains("INT") || upper.contains("DEC") || upper.contains("NUM")
+                || upper.contains("DOUBLE") || upper.contains("FLOAT") || upper.contains("REAL");
     }
 }

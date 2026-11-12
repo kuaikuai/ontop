@@ -112,6 +112,7 @@ public final class PathSpecDeriver {
 
         RelationDefinition relation = first.getRelationDefinition();
         String nodeKeyColumn = relation.getAttribute(subjectAlias.get().columnIndex + 1).getID().getSQLRendering();
+        String nodeKeyType = relation.getAttribute(subjectAlias.get().columnIndex + 1).getTermType().getName();
         String parentJoinKeyColumn = relation.getAttribute(childJoinIndex + 1).getID().getSQLRendering();
         String joinKeyColumn = relation.getAttribute(parentJoinIndex + 1).getID().getSQLRendering();
         String table = relation.getAtomPredicate().getName();
@@ -122,6 +123,7 @@ public final class PathSpecDeriver {
                 joinKeyColumn,
                 parentJoinKeyColumn,
                 nodeKeyColumn,
+                nodeKeyType,
                 subjectTemplate.get().prefix,
                 Optional.empty()));
     }

@@ -14,17 +14,19 @@ public interface PathSpec {
         private final String joinKeyColumn;
         private final String parentJoinKeyColumn;
         private final String nodeKeyColumn;
+        private final String nodeKeyType;
         private final String iriPrefix;
         private final Optional<TraversalFilter> traversalFilter;
 
         public Self(String predicate, String table, String joinKeyColumn,
-                    String parentJoinKeyColumn, String nodeKeyColumn,
+                    String parentJoinKeyColumn, String nodeKeyColumn, String nodeKeyType,
                     String iriPrefix, Optional<TraversalFilter> traversalFilter) {
             this.predicate = predicate;
             this.table = table;
             this.joinKeyColumn = joinKeyColumn;
             this.parentJoinKeyColumn = parentJoinKeyColumn;
             this.nodeKeyColumn = nodeKeyColumn;
+            this.nodeKeyType = nodeKeyType;
             this.iriPrefix = iriPrefix;
             this.traversalFilter = traversalFilter;
         }
@@ -53,6 +55,10 @@ public interface PathSpec {
 
         public String nodeKeyColumn() {
             return nodeKeyColumn;
+        }
+
+        public String nodeKeyType() {
+            return nodeKeyType;
         }
 
         public String iriPrefix() {

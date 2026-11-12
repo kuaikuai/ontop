@@ -33,14 +33,23 @@ public class PathQuerySupportImpl implements PathQuerySupport {
     }
 
     @Override
-    public RelationDefinition toRelation(String pathSql) {
+    public RelationDefinition toRelation(String pathSql, String nodeKeyType) {
         RelationDefinition.AttributeListBuilder builder = AbstractRelationDefinition.attributeListBuilder();
         QuotedIDFactory ids = dbParameters.getQuotedIDFactory();
         DBTypeFactory types = dbParameters.getDBTypeFactory();
         DBTermType stringType = types.getDBStringType();
-        builder.addAttribute(ids.createAttributeID("node_iri"), stringType, stringType.getName(), true);
+        DBTermType keyType = stringType;
+        if (nodeKeyType != null) {
+            try {
+                DBTermType derived = types.getDBTermType(nodeKeyType);
+                if (derived != null)
+                    keyType = derived;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        builder.addAttribute(ids.createAttributeID("node_iri"), keyType, keyType.getName(), true);
         builder.addAttribute(ids.createAttributeID("depth"), stringType, stringType.getName(), false);
-        builder.addAttribute(ids.createAttributeID("predecessor"), stringType, stringType.getName(), true);
+        builder.addAttribute(ids.createAttributeID("predecessor"), keyType, keyType.getName(), true);
         return new PathRelationDefinition(pathSql, builder);
     }
 }

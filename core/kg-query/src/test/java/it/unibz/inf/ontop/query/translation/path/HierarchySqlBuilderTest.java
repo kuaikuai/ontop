@@ -13,7 +13,7 @@ public class HierarchySqlBuilderTest {
     private final PathSpec.Self spec = new PathSpec.Self(
             "http://example.org/bom/parent_bom_item",
             "ods.t", "material_code", "parent_material_code",
-            "bom_item_id", "http://example.org/bom/bom_item/",
+            "bom_item_id", "BIGINT", "http://example.org/bom/bom_item/",
             Optional.empty());
 
     private final SeedSource.Constant seed =
@@ -28,6 +28,9 @@ public class HierarchySqlBuilderTest {
         assertTrue(sql.contains("UNION ALL"));
         assertTrue(sql.contains("material_code"));
         assertFalse(sql.contains("'3' AS depth"));
+        assertTrue(sql.contains("bom_item_id AS node_iri"));
+        assertFalse(sql.contains("CONCAT('', "));
+        assertTrue(sql.contains("bom_item_id = 3517912884"));
     }
 
     @Test

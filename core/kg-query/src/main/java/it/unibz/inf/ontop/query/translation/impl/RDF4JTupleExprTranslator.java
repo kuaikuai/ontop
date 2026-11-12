@@ -376,7 +376,8 @@ public class RDF4JTupleExprTranslator {
         PathSpec spec = specOptional.get();
         String sql = new HierarchySqlBuilder().build(
                 spec, new SeedSource.Constant(startIri), minDepth, maxDepth, spec.traversalFilter());
-        RelationDefinition relation = support.toRelation(sql);
+        String nodeKeyType = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).nodeKeyType() : null;
+        RelationDefinition relation = support.toRelation(sql, nodeKeyType);
         Variable rawNode = termFactory.getVariable(objectName + "_raw");
         ExtensionalDataNode dataNode = iqFactory.createExtensionalDataNode(
                 relation, ImmutableMap.of(0, rawNode));

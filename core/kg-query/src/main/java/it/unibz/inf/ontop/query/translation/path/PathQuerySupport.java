@@ -11,5 +11,5 @@ public interface PathQuerySupport {
 
     Optional<PathSpec> getSpec(String predicateIri);
 
-    RelationDefinition toRelation(String pathSql);
+    RelationDefinition toRelation(String pathSql, String nodeKeyType);
 }
