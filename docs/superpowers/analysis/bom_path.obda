@@ -1,0 +1,40 @@
+[PrefixDeclaration]
+:		http://example.org/bom/
+owl:	http://www.w3.org/2002/07/owl#
+rdf:	http://www.w3.org/1999/02/22-rdf-syntax-ns#
+xml:	http://www.w3.org/XML/1998/namespace
+xsd:	http://www.w3.org/2001/XMLSchema#
+rdfs:	http://www.w3.org/2000/01/rdf-schema#
+quest:	http://obda.org/quest#
+
+[MappingDeclaration] @collection [[
+
+-- ---------------------------------------------------------------------------
+-- BOM 节点。列名 item_code / item_name 需按实际表结构调整。
+-- ---------------------------------------------------------------------------
+mappingId	MAPID-bom-item
+target		:bom_item/{bom_item_id} a :BomItem ;
+			:bomItemId    {bom_item_id} ;
+			:materialCode {material_code} ;
+			:itemCode     {item_code} ;
+			:itemName     {item_name} .
+source		SELECT bom_item_id, material_code, item_code, item_name
+			FROM ods.dp_mpo_mopp_bom_detial_info_dd
+
+-- ---------------------------------------------------------------------------
+-- 路径结果（来自数据库视图 bom_path）
+-- 列：start_bom_item_id, bom_item_id, material_code,
+--     parent_material_code, depth, predecessor
+-- depth 用 ^^xsd:integer，保证 FILTER(?depth <= 3) 可比较
+-- ---------------------------------------------------------------------------
+mappingId	MAPID-bom-path
+target		:path/{start_bom_item_id}/{depth}/{bom_item_id} a :BomPath ;
+			:startBomItemId     {start_bom_item_id} ;
+			:bomItemId          {bom_item_id} ;
+			:depth              {depth}^^xsd:integer ;
+			:predecessor        {predecessor} ;
+			:parentMaterialCode {parent_material_code} .
+source		SELECT start_bom_item_id, bom_item_id, depth, predecessor, parent_material_code
+			FROM bom_path
+
+]]
