@@ -15,7 +15,8 @@ public class PathSpecRegistryImplTest {
     public void upsertIncrementsVersionAndReplaces() {
         PathSpecRegistry registry = new PathSpecRegistryImpl();
         long v0 = registry.version();
-        PathSpec.Self spec = new PathSpec.Self("p", "t", "a", "b", "id", "VARCHAR", "pref", Optional.empty());
+        PathSpec.Self spec = new PathSpec.Self("p", "t", "a", "b", "id", "VARCHAR", "pref",
+                java.util.Collections.emptyMap(), Optional.empty());
         registry.upsert(spec);
         assertEquals(v0 + 1, registry.version());
         assertSame(spec, registry.get("p").orElseThrow());
@@ -24,7 +25,8 @@ public class PathSpecRegistryImplTest {
     @Test
     public void remove() {
         PathSpecRegistry registry = new PathSpecRegistryImpl();
-        registry.upsert(new PathSpec.Self("p", "t", "a", "b", "id", "VARCHAR", "pref", Optional.empty()));
+        registry.upsert(new PathSpec.Self("p", "t", "a", "b", "id", "VARCHAR", "pref",
+                java.util.Collections.emptyMap(), Optional.empty()));
         registry.remove("p");
         assertTrue(registry.get("p").isEmpty());
     }

@@ -3,6 +3,7 @@ package it.unibz.inf.ontop.query.translation.path;
 import it.unibz.inf.ontop.dbschema.PathSpec;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
 
+import java.util.Collection;
 import java.util.Optional;
 
 public interface PathQuerySupport {
@@ -11,5 +12,5 @@ public interface PathQuerySupport {
 
     Optional<PathSpec> getSpec(String predicateIri);
 
-    RelationDefinition toRelation(String pathSql, String nodeKeyType);
+    RelationDefinition toRelation(String pathSql, String nodeKeyType, Collection<String> nodeColumns);
 }

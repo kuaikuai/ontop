@@ -7,6 +7,7 @@ import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.IQTree;
+import it.unibz.inf.ontop.iq.UnaryIQTree;
 import it.unibz.inf.ontop.iq.impl.NaryIQTreeTools;
 import it.unibz.inf.ontop.iq.node.ConstructionNode;
 import it.unibz.inf.ontop.iq.node.ExtensionalDataNode;
@@ -22,7 +23,10 @@ import it.unibz.inf.ontop.model.template.Template;
 import it.unibz.inf.ontop.spec.mapping.Mapping;
 import org.apache.commons.rdf.api.IRI;
 
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -35,6 +39,9 @@ import static it.unibz.inf.ontop.iq.impl.UnaryIQTreeTools.UnaryIQTreeDecompositi
  * Only handles the simple self-join shape: a ConstructionNode defining subject/object IRI
  * templates with the same prefix, joined over exactly two ExtensionalDataNodes on the same
  * relation sharing exactly one join variable.
+ *
+ * It also collects, per physical table, the simple attribute mappings (property IRI to column),
+ * so that node attributes living in the same table can be carried by the path CTE.
  */
 public final class PathSpecDeriver {
 
@@ -42,19 +49,64 @@ public final class PathSpecDeriver {
     }
 
     public static void deriveAndRegister(Mapping mapping, PathSpecRegistry registry) {
+        Map<String, Map<String, String>> tableColumns = collectTableColumns(mapping);
+
         for (RDFAtomPredicate predicate : mapping.getRDFAtomPredicates()) {
             for (IRI iri : mapping.getRDFProperties(predicate)) {
                 String key = iri.getIRIString();
                 if (registry.get(key).isPresent())
                     continue;
                 mapping.getRDFPropertyDefinition(predicate, iri)
-                        .flatMap(iq -> derive(key, iq))
+                        .flatMap(iq -> derive(key, iq, tableColumns))
                         .ifPresent(registry::upsert);
             }
         }
     }
 
-    static Optional<PathSpec.Self> derive(String predicateIri, IQ iq) {
+    private static Map<String, Map<String, String>> collectTableColumns(Mapping mapping) {
+        Map<String, Map<String, String>> tableColumns = new HashMap<>();
+        for (RDFAtomPredicate predicate : mapping.getRDFAtomPredicates()) {
+            for (IRI iri : mapping.getRDFProperties(predicate)) {
+                mapping.getRDFPropertyDefinition(predicate, iri)
+                        .flatMap(PathSpecDeriver::derivePropertyColumn)
+                        .ifPresent(propertyColumn -> tableColumns
+                                .computeIfAbsent(propertyColumn.table, k -> new HashMap<>())
+                                .put(iri.getIRIString(), propertyColumn.column));
+            }
+        }
+        return tableColumns;
+    }
+
+    private static Optional<PropertyColumn> derivePropertyColumn(IQ iq) {
+        DataAtom<AtomPredicate> atom = iq.getProjectionAtom();
+        List<? extends VariableOrGroundTerm> args = atom.getArguments();
+        if (args.size() < 3 || !(args.get(2) instanceof Variable))
+            return Optional.empty();
+        Variable objectVariable = (Variable) args.get(2);
+
+        var constructionDecomposition = UnaryIQTreeDecomposition.of(iq.getTree(), ConstructionNode.class);
+        if (!constructionDecomposition.isPresent())
+            return Optional.empty();
+        ConstructionNode construction = constructionDecomposition.getNode();
+        ExtensionalDataNode source = findExtensional(constructionDecomposition.getChild());
+        if (source == null)
+            return Optional.empty();
+
+        Optional<Variable> columnVariable = unwrapColumn(construction.getSubstitution().apply(objectVariable));
+        if (!columnVariable.isPresent())
+            return Optional.empty();
+        Integer columnIndex = columnOf(source, columnVariable.get());
+        if (columnIndex == null)
+            return Optional.empty();
+
+        RelationDefinition relation = source.getRelationDefinition();
+        String table = relation.getAtomPredicate().getName();
+        String column = relation.getAttribute(columnIndex + 1).getID().getSQLRendering();
+        return Optional.of(new PropertyColumn(table, column));
+    }
+
+    static Optional<PathSpec.Self> derive(String predicateIri, IQ iq,
+                                          Map<String, Map<String, String>> tableColumns) {
         DataAtom<AtomPredicate> atom = iq.getProjectionAtom();
         List<? extends VariableOrGroundTerm> args = atom.getArguments();
         if (args.size() < 3)
@@ -116,6 +168,7 @@ public final class PathSpecDeriver {
         String parentJoinKeyColumn = relation.getAttribute(childJoinIndex + 1).getID().getSQLRendering();
         String joinKeyColumn = relation.getAttribute(parentJoinIndex + 1).getID().getSQLRendering();
         String table = relation.getAtomPredicate().getName();
+        Map<String, String> nodeColumns = tableColumns.getOrDefault(table, Collections.emptyMap());
 
         return Optional.of(new PathSpec.Self(
                 predicateIri,
@@ -125,7 +178,16 @@ public final class PathSpecDeriver {
                 nodeKeyColumn,
                 nodeKeyType,
                 subjectTemplate.get().prefix,
+                nodeColumns,
                 Optional.empty()));
+    }
+
+    private static ExtensionalDataNode findExtensional(IQTree tree) {
+        if (tree instanceof ExtensionalDataNode)
+            return (ExtensionalDataNode) tree;
+        if (tree instanceof UnaryIQTree)
+            return findExtensional(((UnaryIQTree) tree).getChild());
+        return null;
     }
 
     private static Optional<IriTemplate> extractIriTemplate(ImmutableTerm term) {
@@ -150,7 +212,7 @@ public final class PathSpecDeriver {
         }
         if (prefix.length() == 0)
             return Optional.empty();
-        if (lexicalTerm.getTerms().size() != 1)
+        if (lexicalTerm.getTerms().isEmpty())
             return Optional.empty();
         Optional<Variable> columnVariable = unwrapColumn(lexicalTerm.getTerms().get(0));
         return columnVariable.map(v -> new IriTemplate(prefix.toString(), v));
@@ -160,7 +222,7 @@ public final class PathSpecDeriver {
         ImmutableTerm current = term;
         while (current instanceof ImmutableFunctionalTerm) {
             ImmutableFunctionalTerm functionalTerm = (ImmutableFunctionalTerm) current;
-            if (functionalTerm.getTerms().size() != 1)
+            if (functionalTerm.getTerms().isEmpty())
                 return Optional.empty();
             current = functionalTerm.getTerms().get(0);
         }
@@ -181,7 +243,7 @@ public final class PathSpecDeriver {
     private static Integer columnOf(ExtensionalDataNode node, Variable variable) {
         return node.getArgumentMap().entrySet().stream()
                 .filter(e -> e.getValue().equals(variable))
-                .map(java.util.Map.Entry::getKey)
+                .map(Map.Entry::getKey)
                 .findFirst()
                 .orElse(null);
     }
@@ -210,6 +272,16 @@ public final class PathSpecDeriver {
         private AliasColumn(ExtensionalDataNode node, int columnIndex) {
             this.node = node;
             this.columnIndex = columnIndex;
+        }
+    }
+
+    private static final class PropertyColumn {
+        private final String table;
+        private final String column;
+
+        private PropertyColumn(String table, String column) {
+            this.table = table;
+            this.column = column;
         }
     }
 }

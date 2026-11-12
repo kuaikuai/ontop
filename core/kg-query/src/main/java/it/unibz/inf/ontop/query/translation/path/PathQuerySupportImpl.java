@@ -10,6 +10,7 @@ import it.unibz.inf.ontop.dbschema.impl.PathRelationDefinition;
 import it.unibz.inf.ontop.model.type.DBTypeFactory;
 import it.unibz.inf.ontop.model.type.DBTermType;
 
+import java.util.Collection;
 import java.util.Optional;
 
 public class PathQuerySupportImpl implements PathQuerySupport {
@@ -33,7 +34,7 @@ public class PathQuerySupportImpl implements PathQuerySupport {
     }
 
     @Override
-    public RelationDefinition toRelation(String pathSql, String nodeKeyType) {
+    public RelationDefinition toRelation(String pathSql, String nodeKeyType, Collection<String> nodeColumns) {
         RelationDefinition.AttributeListBuilder builder = AbstractRelationDefinition.attributeListBuilder();
         QuotedIDFactory ids = dbParameters.getQuotedIDFactory();
         DBTypeFactory types = dbParameters.getDBTypeFactory();
@@ -50,6 +51,9 @@ public class PathQuerySupportImpl implements PathQuerySupport {
         builder.addAttribute(ids.createAttributeID("node_iri"), keyType, keyType.getName(), true);
         builder.addAttribute(ids.createAttributeID("depth"), stringType, stringType.getName(), false);
         builder.addAttribute(ids.createAttributeID("predecessor"), keyType, keyType.getName(), true);
+        for (String column : nodeColumns) {
+            builder.addAttribute(ids.createAttributeID(column), stringType, stringType.getName(), true);
+        }
         return new PathRelationDefinition(pathSql, builder);
     }
 }

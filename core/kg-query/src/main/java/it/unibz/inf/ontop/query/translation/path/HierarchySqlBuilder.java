@@ -3,7 +3,9 @@ package it.unibz.inf.ontop.query.translation.path;
 import it.unibz.inf.ontop.dbschema.PathSpec;
 import it.unibz.inf.ontop.dbschema.PathSpec.TraversalFilter;
 
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 public class HierarchySqlBuilder {
 
@@ -15,13 +17,24 @@ public class HierarchySqlBuilder {
             throw new IllegalArgumentException("require 1 <= minDepth <= maxDepth");
 
         PathSpec.Self self = (PathSpec.Self) spec;
+        List<String> extraColumns = self.nodeColumns().values().stream()
+                .distinct()
+                .collect(Collectors.toList());
+        String extraSelect = extraColumns.isEmpty()
+                ? ""
+                : ", " + String.join(", ", extraColumns);
+        String extraParentSelect = extraColumns.isEmpty()
+                ? ""
+                : extraColumns.stream().map(c -> ", p." + c).collect(Collectors.joining());
+
         StringBuilder sb = new StringBuilder("WITH\n");
 
         sb.append("level_0 AS (\n  SELECT ")
                 .append(self.nodeKeyColumn()).append(" AS node_iri, ")
                 .append(self.parentJoinKeyColumn()).append(" AS next_key, '0' AS depth, ")
-                .append(self.nodeKeyColumn()).append(" AS predecessor ")
-                .append("FROM ").append(self.table()).append(" ")
+                .append(self.nodeKeyColumn()).append(" AS predecessor")
+                .append(extraSelect)
+                .append(" FROM ").append(self.table()).append(" ")
                 .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(self, seed))
                 .append("\n)");
 
@@ -33,17 +46,21 @@ public class HierarchySqlBuilder {
             sb.append(",\nlevel_").append(k).append(" AS (\n  SELECT ")
                     .append("p.").append(self.nodeKeyColumn()).append(" AS node_iri, ")
                     .append("p.").append(self.parentJoinKeyColumn()).append(" AS next_key, ")
-                    .append("'").append(k).append("' AS depth, l.node_iri AS predecessor ")
-                    .append("FROM ").append(self.table()).append(" p ")
+                    .append("'").append(k).append("' AS depth, l.node_iri AS predecessor")
+                    .append(extraParentSelect)
+                    .append(" FROM ").append(self.table()).append(" p ")
                     .append("JOIN level_").append(k - 1)
                     .append(" l ON p.").append(self.joinKeyColumn()).append(" = l.next_key")
                     .append(filterSql)
                     .append("\n)");
         }
 
-        sb.append("\nSELECT node_iri, depth, predecessor FROM level_").append(minDepth);
+        String projectedColumns = "node_iri, depth, predecessor" + extraSelect;
+        sb.append("\nSELECT ").append(projectedColumns)
+                .append(" FROM level_").append(minDepth);
         for (int k = minDepth + 1; k <= maxDepth; k++) {
-            sb.append("\nUNION ALL SELECT node_iri, depth, predecessor FROM level_").append(k);
+            sb.append("\nUNION ALL SELECT ").append(projectedColumns)
+                    .append(" FROM level_").append(k);
         }
         return sb.toString();
     }

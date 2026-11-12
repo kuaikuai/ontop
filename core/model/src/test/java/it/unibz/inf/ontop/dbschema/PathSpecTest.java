@@ -14,7 +14,7 @@ public class PathSpecTest {
                 "http://example.org/bom/parent_bom_item",
                 "ods.t", "material_code", "parent_material_code",
                 "bom_item_id", "BIGINT", "http://example.org/bom/bom_item/",
-                Optional.empty());
+                java.util.Collections.emptyMap(), Optional.empty());
         assertEquals("material_code", spec.joinKeyColumn());
         assertEquals("parent_material_code", spec.parentJoinKeyColumn());
         assertEquals("bom_item_id", spec.nodeKeyColumn());

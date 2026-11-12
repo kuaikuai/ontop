@@ -75,6 +75,8 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, Integer> pathMinDepth = new HashMap<>();
     private final Map<String, String> pathDepthVariable = new HashMap<>();
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
+    private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
+    private final Map<String, String> sinkPropertyVariables = new HashMap<>();
 
     public RDF4JTupleExprTranslator(ImmutableMap<Variable, GroundTerm> externalBindings,
                                     @Nullable Dataset dataset,
@@ -99,6 +101,7 @@ public class RDF4JTupleExprTranslator {
     }
 
     public IQTree getTree(TupleExpr node) throws OntopUnsupportedKGQueryException, OntopInvalidKGQueryException {
+        collectPathTerminals(node);
         collectPathMetadata(node);
         return translate(node).iqTree;
     }
@@ -377,11 +380,35 @@ public class RDF4JTupleExprTranslator {
         String sql = new HierarchySqlBuilder().build(
                 spec, new SeedSource.Constant(startIri), minDepth, maxDepth, spec.traversalFilter());
         String nodeKeyType = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).nodeKeyType() : null;
-        RelationDefinition relation = support.toRelation(sql, nodeKeyType);
+        java.util.Collection<String> nodeColumns = (spec instanceof PathSpec.Self)
+                ? ((PathSpec.Self) spec).nodeColumns().values().stream().distinct().collect(java.util.stream.Collectors.toList())
+                : java.util.Collections.emptyList();
+        RelationDefinition relation = support.toRelation(sql, nodeKeyType, nodeColumns);
         Variable rawNode = termFactory.getVariable(objectName + "_raw");
-        ExtensionalDataNode dataNode = iqFactory.createExtensionalDataNode(
-                relation, ImmutableMap.of(0, rawNode));
         Variable nodeVariable = termFactory.getVariable(objectName);
+        ImmutableMap.Builder<Integer, Variable> argumentMap = ImmutableMap.builder();
+        argumentMap.put(0, rawNode);
+        ImmutableSet.Builder<Variable> projectedVariables = ImmutableSet.builder();
+        projectedVariables.add(nodeVariable);
+        if (spec instanceof PathSpec.Self) {
+            Map<String, String> columnToVariable = new HashMap<>();
+            for (Map.Entry<String, String> e : ((PathSpec.Self) spec).nodeColumns().entrySet()) {
+                String variableName = sinkPropertyVariables.get(e.getKey());
+                if (variableName != null)
+                    columnToVariable.putIfAbsent(e.getValue(), variableName);
+            }
+            int index = 3;
+            for (String column : nodeColumns) {
+                String variableName = columnToVariable.get(column);
+                if (variableName != null) {
+                    Variable attributeVariable = termFactory.getVariable(variableName);
+                    argumentMap.put(index, attributeVariable);
+                    projectedVariables.add(attributeVariable);
+                }
+                index++;
+            }
+        }
+        ExtensionalDataNode dataNode = iqFactory.createExtensionalDataNode(relation, argumentMap.build());
         String iriPrefix = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).iriPrefix() : "";
         ImmutableList<Template.Component> template = Template.builder()
                 .string(iriPrefix)
@@ -389,7 +416,7 @@ public class RDF4JTupleExprTranslator {
                 .build();
         ImmutableFunctionalTerm iriTerm = termFactory.getIRIFunctionalTerm(template, ImmutableList.of(rawNode));
         ConstructionNode constructionNode = iqFactory.createConstructionNode(
-                ImmutableSet.of(nodeVariable),
+                projectedVariables.build(),
                 substitutionFactory.getSubstitution(nodeVariable, iriTerm));
         IQTree pathTree = iqFactory.createUnaryIQTree(constructionNode, dataNode);
         return createTranslationResult(pathTree, ImmutableSet.of());
@@ -398,6 +425,37 @@ public class RDF4JTupleExprTranslator {
     private boolean isPathMetadataPredicate(StatementPattern pattern) {
         return pattern.getPredicateVar().getValue() instanceof IRI
                 && pattern.getPredicateVar().getValue().stringValue().startsWith(PATH_NS);
+    }
+
+    private boolean isSinkProperty(StatementPattern pattern) {
+        return pattern.getPredicateVar().getValue() instanceof IRI
+                && sinkPropertyVariables.containsKey(pattern.getPredicateVar().getValue().stringValue());
+    }
+
+    private void collectPathTerminals(QueryModelNode node) {
+        if (node instanceof ArbitraryLengthPath) {
+            ArbitraryLengthPath path = (ArbitraryLengthPath) node;
+            String objectName = path.getObjectVar().getName();
+            if (objectName == null)
+                return;
+            if (!(path.getPathExpression() instanceof StatementPattern))
+                return;
+            StatementPattern sp = (StatementPattern) path.getPathExpression();
+            if (!(sp.getPredicateVar().getValue() instanceof IRI))
+                return;
+            PathQuerySupport support = PathQueryContext.current();
+            if (support == null)
+                return;
+            support.getSpec(sp.getPredicateVar().getValue().stringValue())
+                    .ifPresent(spec -> pathTerminalSpecs.put(objectName, spec));
+            return;
+        }
+        if (node instanceof BinaryTupleOperator) {
+            collectPathTerminals(((BinaryTupleOperator) node).getLeftArg());
+            collectPathTerminals(((BinaryTupleOperator) node).getRightArg());
+        } else if (node instanceof UnaryTupleOperator) {
+            collectPathTerminals(((UnaryTupleOperator) node).getArg());
+        }
     }
 
     private void collectPathMetadata(QueryModelNode node) {
@@ -419,6 +477,16 @@ public class RDF4JTupleExprTranslator {
                     } else if (predicate.equals(PATH_NS + "predecessor")) {
                         String object = sp.getObjectVar().getName();
                         if (object != null) pathPredecessorVariable.put(subject, object);
+                    }
+                }
+                String subjectName = sp.getSubjectVar().getName();
+                String objectName = sp.getObjectVar().getName();
+                if (subjectName != null && objectName != null) {
+                    PathSpec terminalSpec = pathTerminalSpecs.get(subjectName);
+                    if (terminalSpec instanceof PathSpec.Self) {
+                        String column = ((PathSpec.Self) terminalSpec).nodeColumns().get(predicate);
+                        if (column != null)
+                            sinkPropertyVariables.put(predicate, objectName);
                     }
                 }
             }
@@ -797,7 +865,7 @@ public class RDF4JTupleExprTranslator {
 
     private TranslationResult translate(StatementPattern pattern) {
 
-        if (isPathMetadataPredicate(pattern)) {
+        if (isPathMetadataPredicate(pattern) || isSinkProperty(pattern)) {
             return createTranslationResult(iqFactory.createTrueNode(), ImmutableSet.of());
         }
 

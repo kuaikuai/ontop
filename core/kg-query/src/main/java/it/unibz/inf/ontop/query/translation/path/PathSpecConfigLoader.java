@@ -65,6 +65,7 @@ public final class PathSpecConfigLoader {
                     required(properties, prefix + "nodeKeyColumn"),
                     properties.getProperty(prefix + "nodeKeyType", "VARCHAR"),
                     required(properties, prefix + "iriPrefix"),
+                    java.util.Collections.emptyMap(),
                     Optional.empty()));
             System.err.println("[PathSpec] loaded predicate " + predicate);
             count++;

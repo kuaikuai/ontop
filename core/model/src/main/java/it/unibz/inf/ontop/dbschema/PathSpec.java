@@ -1,5 +1,6 @@
 package it.unibz.inf.ontop.dbschema;
 
+import java.util.Map;
 import java.util.Optional;
 
 public interface PathSpec {
@@ -16,11 +17,13 @@ public interface PathSpec {
         private final String nodeKeyColumn;
         private final String nodeKeyType;
         private final String iriPrefix;
+        private final Map<String, String> nodeColumns;
         private final Optional<TraversalFilter> traversalFilter;
 
         public Self(String predicate, String table, String joinKeyColumn,
                     String parentJoinKeyColumn, String nodeKeyColumn, String nodeKeyType,
-                    String iriPrefix, Optional<TraversalFilter> traversalFilter) {
+                    String iriPrefix, Map<String, String> nodeColumns,
+                    Optional<TraversalFilter> traversalFilter) {
             this.predicate = predicate;
             this.table = table;
             this.joinKeyColumn = joinKeyColumn;
@@ -28,6 +31,7 @@ public interface PathSpec {
             this.nodeKeyColumn = nodeKeyColumn;
             this.nodeKeyType = nodeKeyType;
             this.iriPrefix = iriPrefix;
+            this.nodeColumns = nodeColumns;
             this.traversalFilter = traversalFilter;
         }
 
@@ -63,6 +67,10 @@ public interface PathSpec {
 
         public String iriPrefix() {
             return iriPrefix;
+        }
+
+        public Map<String, String> nodeColumns() {
+            return nodeColumns;
         }
     }
 
