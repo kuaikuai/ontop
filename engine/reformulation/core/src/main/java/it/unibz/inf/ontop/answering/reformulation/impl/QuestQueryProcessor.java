@@ -22,6 +22,7 @@ import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
 import it.unibz.inf.ontop.query.translation.path.PathQueryContext;
 import it.unibz.inf.ontop.query.translation.path.PathQuerySupport;
 import it.unibz.inf.ontop.query.translation.path.PathQuerySupportImpl;
+import it.unibz.inf.ontop.query.translation.path.PathSpecConfigLoader;
 import it.unibz.inf.ontop.spec.OBDASpecification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -81,6 +82,7 @@ public class QuestQueryProcessor implements QueryReformulator {
 		this.queryCache = queryCache;
 		this.pathQuerySupport = new PathQuerySupportImpl(
 				obdaSpecification.getDBParameters(), pathSpecRegistry);
+		PathSpecConfigLoader.loadIfConfigured(pathSpecRegistry);
 	}
 
 	@Override
