@@ -356,8 +356,10 @@ public class RDF4JTupleExprTranslator {
             return null;
         String predicateIri = sp.getPredicateVar().getValue().stringValue();
         Optional<PathSpec> specOptional = support.getSpec(predicateIri);
-        if (!specOptional.isPresent())
+        if (!specOptional.isPresent()) {
+            System.err.println("[PathSpec] no PathSpec registered for " + predicateIri);
             return null;
+        }
         if (!(path.getSubjectVar().getValue() instanceof IRI))
             return null;
         String objectName = path.getObjectVar().getName();
@@ -365,8 +367,11 @@ public class RDF4JTupleExprTranslator {
             return null;
         String startIri = path.getSubjectVar().getValue().stringValue();
         Integer maxDepth = pathMaxDepth.get(startIri);
-        if (maxDepth == null)
+        if (maxDepth == null) {
+            System.err.println("[PathSpec] no path:maxDepth for start " + startIri
+                    + " (collected subjects: " + pathMaxDepth.keySet() + ")");
             return null;
+        }
         int minDepth = pathMinDepth.getOrDefault(startIri, 1);
         PathSpec spec = specOptional.get();
         String sql = new HierarchySqlBuilder().build(

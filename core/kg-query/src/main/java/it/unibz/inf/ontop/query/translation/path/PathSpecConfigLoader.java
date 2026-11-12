@@ -35,8 +35,11 @@ public final class PathSpecConfigLoader {
 
     public static void loadIfConfigured(PathSpecRegistry registry) {
         String path = System.getProperty(FILE_PROPERTY);
-        if (path == null || path.trim().isEmpty())
+        System.err.println("[PathSpec] " + FILE_PROPERTY + " = " + path);
+        if (path == null || path.trim().isEmpty()) {
+            System.err.println("[PathSpec] no config file: registry stays empty");
             return;
+        }
         load(registry, new File(path.trim()));
     }
 
@@ -48,6 +51,7 @@ public final class PathSpecConfigLoader {
             throw new IllegalStateException("Cannot read path spec config: " + file, e);
         }
 
+        int count = 0;
         for (int i = 0; ; i++) {
             String prefix = "path." + i + ".";
             String predicate = properties.getProperty(prefix + "predicate");
@@ -61,7 +65,10 @@ public final class PathSpecConfigLoader {
                     required(properties, prefix + "nodeKeyColumn"),
                     required(properties, prefix + "iriPrefix"),
                     Optional.empty()));
+            System.err.println("[PathSpec] loaded predicate " + predicate);
+            count++;
         }
+        System.err.println("[PathSpec] loaded " + count + " spec(s) from " + file);
     }
 
     private static String required(Properties properties, String key) {

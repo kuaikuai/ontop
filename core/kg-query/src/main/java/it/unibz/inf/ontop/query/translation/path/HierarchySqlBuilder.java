@@ -15,33 +15,36 @@ public class HierarchySqlBuilder {
             throw new IllegalArgumentException("require 1 <= minDepth <= maxDepth");
 
         PathSpec.Self self = (PathSpec.Self) spec;
-        String level0 = "SELECT "
-                + iri(self, self.nodeKeyColumn()) + " AS node_iri, "
-                + self.parentJoinKeyColumn() + " AS next_key, '0' AS depth, "
-                + iri(self, self.nodeKeyColumn()) + " AS predecessor "
-                + "FROM " + self.table() + " "
-                + "WHERE " + self.nodeKeyColumn() + " = " + nodeKeyLiteral(seed);
+        StringBuilder sb = new StringBuilder("WITH\n");
 
-        StringBuilder sb = new StringBuilder("SELECT node_iri, depth, predecessor FROM (\n");
-        sb.append(level0).append("\n");
+        sb.append("level_0 AS (\n  SELECT ")
+                .append(iri(self, self.nodeKeyColumn())).append(" AS node_iri, ")
+                .append(self.parentJoinKeyColumn()).append(" AS next_key, '0' AS depth, ")
+                .append(iri(self, self.nodeKeyColumn())).append(" AS predecessor ")
+                .append("FROM ").append(self.table()).append(" ")
+                .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(seed))
+                .append("\n)");
 
         String filterSql = filter.flatMap(TraversalFilter::where)
                 .map(w -> " WHERE " + w)
                 .orElse("");
 
-        String previous = level0;
         for (int k = 1; k <= maxDepth; k++) {
-            String body = "SELECT "
-                    + iri(self, "p." + self.nodeKeyColumn()) + " AS node_iri, "
-                    + "p." + self.parentJoinKeyColumn() + " AS next_key, "
-                    + "'" + k + "' AS depth, l.node_iri AS predecessor "
-                    + "FROM " + self.table() + " p "
-                    + "JOIN (" + previous + ") l ON p." + self.joinKeyColumn() + " = l.next_key"
-                    + filterSql;
-            sb.append("UNION ALL\n").append(body).append("\n");
-            previous = body;
+            sb.append(",\nlevel_").append(k).append(" AS (\n  SELECT ")
+                    .append(iri(self, "p." + self.nodeKeyColumn())).append(" AS node_iri, ")
+                    .append("p.").append(self.parentJoinKeyColumn()).append(" AS next_key, ")
+                    .append("'").append(k).append("' AS depth, l.node_iri AS predecessor ")
+                    .append("FROM ").append(self.table()).append(" p ")
+                    .append("JOIN level_").append(k - 1)
+                    .append(" l ON p.").append(self.joinKeyColumn()).append(" = l.next_key")
+                    .append(filterSql)
+                    .append("\n)");
         }
-        sb.append(") path_rows WHERE depth >= ").append(minDepth);
+
+        sb.append("\nSELECT node_iri, depth, predecessor FROM level_").append(minDepth);
+        for (int k = minDepth + 1; k <= maxDepth; k++) {
+            sb.append("\nUNION ALL SELECT node_iri, depth, predecessor FROM level_").append(k);
+        }
         return sb.toString();
     }
 

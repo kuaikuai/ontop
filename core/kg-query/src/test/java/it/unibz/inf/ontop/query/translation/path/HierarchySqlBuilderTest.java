@@ -31,8 +31,10 @@ public class HierarchySqlBuilderTest {
     }
 
     @Test
-    public void minDepthFiltersFinalResult() {
+    public void minDepthStartsFromTheRequestedLevel() {
         String sql = new HierarchySqlBuilder().build(spec, seed, 2, 3, Optional.empty());
-        assertTrue(sql.contains("WHERE depth >= 2"));
+        assertTrue(sql.contains("WITH"));
+        assertTrue(sql.contains("SELECT node_iri, depth, predecessor FROM level_2"));
+        assertTrue(sql.contains("UNION ALL SELECT node_iri, depth, predecessor FROM level_3"));
     }
 }
