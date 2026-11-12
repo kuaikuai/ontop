@@ -17,7 +17,7 @@ public class HierarchySqlBuilder {
         PathSpec.Self self = (PathSpec.Self) spec;
         String level0 = "SELECT "
                 + iri(self, self.nodeKeyColumn()) + " AS node_iri, "
-                + self.joinKeyColumn() + " AS join_key, 0 AS depth, "
+                + self.parentJoinKeyColumn() + " AS next_key, '0' AS depth, "
                 + iri(self, self.nodeKeyColumn()) + " AS predecessor "
                 + "FROM " + self.table() + " "
                 + "WHERE " + self.nodeKeyColumn() + " = " + nodeKeyLiteral(seed);
@@ -33,10 +33,10 @@ public class HierarchySqlBuilder {
         for (int k = 1; k <= maxDepth; k++) {
             String body = "SELECT "
                     + iri(self, "p." + self.nodeKeyColumn()) + " AS node_iri, "
-                    + "p." + self.joinKeyColumn() + " AS join_key, "
-                    + k + " AS depth, l.node_iri AS predecessor "
+                    + "p." + self.parentJoinKeyColumn() + " AS next_key, "
+                    + "'" + k + "' AS depth, l.node_iri AS predecessor "
                     + "FROM " + self.table() + " p "
-                    + "JOIN (" + previous + ") l ON p." + self.parentJoinKeyColumn() + " = l.join_key"
+                    + "JOIN (" + previous + ") l ON p." + self.joinKeyColumn() + " = l.next_key"
                     + filterSql;
             sb.append("UNION ALL\n").append(body).append("\n");
             previous = body;
@@ -46,7 +46,7 @@ public class HierarchySqlBuilder {
     }
 
     private String iri(PathSpec.Self self, String nodeKeyExpression) {
-        return "CONCAT('" + self.iriPrefix() + "', " + nodeKeyExpression + ")";
+        return "CONCAT('', " + nodeKeyExpression + ")";
     }
 
     private String nodeKeyLiteral(SeedSource seed) {
@@ -54,6 +54,6 @@ public class HierarchySqlBuilder {
             throw new IllegalArgumentException("Phase 1 supports constant seed only");
         String iri = ((SeedSource.Constant) seed).iri();
         String key = iri.substring(iri.lastIndexOf('/') + 1);
-        return "'" + key.replace("'", "''") + "'";
+        return key;
     }
 }

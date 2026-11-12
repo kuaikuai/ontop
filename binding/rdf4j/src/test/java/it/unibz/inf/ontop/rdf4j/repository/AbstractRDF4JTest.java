@@ -24,6 +24,14 @@ public class AbstractRDF4JTest {
     private static Connection SQL_CONNECTION;
     private static OntopRepositoryConnection REPO_CONNECTION;
 
+    protected static com.google.inject.Injector getInjector() {
+        return H2RDF4JTestTools.getLastInjector();
+    }
+
+    protected static Connection getSQLConnection() {
+        return SQL_CONNECTION;
+    }
+
     protected static void initOBDA(String dbScriptRelativePath, String obdaRelativePath) throws SQLException, IOException {
         initOBDA(dbScriptRelativePath, obdaRelativePath, null);
     }

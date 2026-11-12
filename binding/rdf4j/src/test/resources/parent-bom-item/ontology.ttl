@@ -1,0 +1,8 @@
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix : <http://example.org/ontology#> .
+
+:bom_item a owl:Class .
+:parent_bom_item a owl:ObjectProperty .
+:bom_item_id a owl:DatatypeProperty .
+:material_code a owl:DatatypeProperty .
+:parent_material_code a owl:DatatypeProperty .

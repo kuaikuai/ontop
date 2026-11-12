@@ -7,6 +7,7 @@ import it.unibz.inf.ontop.dbschema.QuotedIDFactory;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
 import it.unibz.inf.ontop.dbschema.impl.AbstractRelationDefinition;
 import it.unibz.inf.ontop.dbschema.impl.PathRelationDefinition;
+import it.unibz.inf.ontop.model.type.DBTypeFactory;
 import it.unibz.inf.ontop.model.type.DBTermType;
 
 import java.util.Optional;
@@ -35,11 +36,11 @@ public class PathQuerySupportImpl implements PathQuerySupport {
     public RelationDefinition toRelation(String pathSql) {
         RelationDefinition.AttributeListBuilder builder = AbstractRelationDefinition.attributeListBuilder();
         QuotedIDFactory ids = dbParameters.getQuotedIDFactory();
-        DBTermType text = dbParameters.getDBTypeFactory().getAbstractRootDBType();
-        String typeName = text.getName();
-        builder.addAttribute(ids.createAttributeID("node_iri"), text, typeName, true);
-        builder.addAttribute(ids.createAttributeID("depth"), text, typeName, false);
-        builder.addAttribute(ids.createAttributeID("predecessor"), text, typeName, true);
+        DBTypeFactory types = dbParameters.getDBTypeFactory();
+        DBTermType stringType = types.getDBStringType();
+        builder.addAttribute(ids.createAttributeID("node_iri"), stringType, stringType.getName(), true);
+        builder.addAttribute(ids.createAttributeID("depth"), stringType, stringType.getName(), false);
+        builder.addAttribute(ids.createAttributeID("predecessor"), stringType, stringType.getName(), true);
         return new PathRelationDefinition(pathSql, builder);
     }
 }

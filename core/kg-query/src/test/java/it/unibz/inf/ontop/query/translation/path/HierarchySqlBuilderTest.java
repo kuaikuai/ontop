@@ -22,12 +22,12 @@ public class HierarchySqlBuilderTest {
     @Test
     public void buildsLevelsAndUnionAll() {
         String sql = new HierarchySqlBuilder().build(spec, seed, 1, 2, Optional.empty());
-        assertTrue(sql.contains("0 AS depth"));
-        assertTrue(sql.contains("1 AS depth"));
-        assertTrue(sql.contains("2 AS depth"));
+        assertTrue(sql.contains("'0' AS depth"));
+        assertTrue(sql.contains("'1' AS depth"));
+        assertTrue(sql.contains("'2' AS depth"));
         assertTrue(sql.contains("UNION ALL"));
         assertTrue(sql.contains("material_code"));
-        assertFalse(sql.contains("3 AS depth"));
+        assertFalse(sql.contains("'3' AS depth"));
     }
 
     @Test

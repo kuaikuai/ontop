@@ -26,6 +26,7 @@ import it.unibz.inf.ontop.model.type.TermTypeInference;
 import it.unibz.inf.ontop.model.type.TypeFactory;
 import it.unibz.inf.ontop.model.vocabulary.RDFS;
 import it.unibz.inf.ontop.model.vocabulary.SPARQL;
+import it.unibz.inf.ontop.model.template.Template;
 import it.unibz.inf.ontop.model.vocabulary.XSD;
 import it.unibz.inf.ontop.query.translation.path.HierarchySqlBuilder;
 import it.unibz.inf.ontop.query.translation.path.PathQueryContext;
@@ -371,17 +372,21 @@ public class RDF4JTupleExprTranslator {
         String sql = new HierarchySqlBuilder().build(
                 spec, new SeedSource.Constant(startIri), minDepth, maxDepth, spec.traversalFilter());
         RelationDefinition relation = support.toRelation(sql);
-        ImmutableMap.Builder<Integer, Variable> argumentMap = ImmutableMap.builder();
-        argumentMap.put(0, termFactory.getVariable(objectName));
-        String depthName = pathDepthVariable.get(objectName);
-        if (depthName != null)
-            argumentMap.put(1, termFactory.getVariable(depthName));
-        String predecessorName = pathPredecessorVariable.get(objectName);
-        if (predecessorName != null)
-            argumentMap.put(2, termFactory.getVariable(predecessorName));
-        return createTranslationResult(
-                iqFactory.createExtensionalDataNode(relation, argumentMap.build()),
-                ImmutableSet.of());
+        Variable rawNode = termFactory.getVariable(objectName + "_raw");
+        ExtensionalDataNode dataNode = iqFactory.createExtensionalDataNode(
+                relation, ImmutableMap.of(0, rawNode));
+        Variable nodeVariable = termFactory.getVariable(objectName);
+        String iriPrefix = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).iriPrefix() : "";
+        ImmutableList<Template.Component> template = Template.builder()
+                .string(iriPrefix)
+                .placeholder()
+                .build();
+        ImmutableFunctionalTerm iriTerm = termFactory.getIRIFunctionalTerm(template, ImmutableList.of(rawNode));
+        ConstructionNode constructionNode = iqFactory.createConstructionNode(
+                ImmutableSet.of(nodeVariable),
+                substitutionFactory.getSubstitution(nodeVariable, iriTerm));
+        IQTree pathTree = iqFactory.createUnaryIQTree(constructionNode, dataNode);
+        return createTranslationResult(pathTree, ImmutableSet.of());
     }
 
     private boolean isPathMetadataPredicate(StatementPattern pattern) {

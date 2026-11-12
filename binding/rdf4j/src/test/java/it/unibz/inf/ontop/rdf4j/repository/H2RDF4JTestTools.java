@@ -15,13 +15,15 @@ import java.util.UUID;
 
 public class H2RDF4JTestTools {
 
+    private static com.google.inject.Injector lastInjector;
+
     private static final String URL_PREFIX = "jdbc:h2:mem:";
 
     private static final String USER = "sa";
     private static final String PASSWORD = "";
 
     public static String generateJdbcUrl() {
-        return URL_PREFIX + UUID.randomUUID();
+        return URL_PREFIX + UUID.randomUUID() + ";DB_CLOSE_DELAY=-1";
     }
 
     public static Connection createH2Instance(String jdbcUrl, String dbScriptRelativePath) throws SQLException, IOException {
@@ -119,6 +121,7 @@ public class H2RDF4JTestTools {
             builder.factsBaseIRI(factsBaseIRI);
 
         OntopSQLOWLAPIConfiguration config = builder.build();
+        lastInjector = config.getInjector();
 
         OntopVirtualRepository repo = OntopRepository.defaultRepository(config);
         repo.init();
@@ -128,5 +131,7 @@ public class H2RDF4JTestTools {
         return repo.getConnection();
     }
 
-
+    public static com.google.inject.Injector getLastInjector() {
+        return lastInjector;
+    }
 }
