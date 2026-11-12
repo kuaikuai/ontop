@@ -44,8 +44,12 @@ public class SameSourceMergeOptimizerTest {
         ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
         ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
 
+        // A = C AND B = D prove that the two occurrences denote the same row
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getStrictEquality(A, C),
+                TERM_FACTORY.getStrictEquality(B, D));
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
-                IQ_FACTORY.createInnerJoinNode(),
+                IQ_FACTORY.createInnerJoinNode(condition),
                 ImmutableList.of(
                         IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
                         IQ_FACTORY.createUnaryIQTree(constr2, dataNode2)));
@@ -69,19 +73,16 @@ public class SameSourceMergeOptimizerTest {
     public void testMergeSevenSameSourceNodes() {
         List<IQTree> children = new ArrayList<>();
         for (int i = 0; i < 7; i++) {
-            Variable v = TERM_FACTORY.getVariable("v" + i);
-            Variable e = TERM_FACTORY.getVariable("e" + i);
+            // Same row projected 7 times: identical variables at the same positions
             ExtensionalDataNode data = IQ_FACTORY.createExtensionalDataNode(
-                    T1_AR5, ImmutableMap.of(0, v, 1, e));
-            ConstructionNode constr = IQ_FACTORY.createConstructionNode(ImmutableSet.of(v, e));
+                    T1_AR5, ImmutableMap.of(0, A, 1, B));
+            ConstructionNode constr = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
             children.add(IQ_FACTORY.createUnaryIQTree(constr, data));
         }
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
                 IQ_FACTORY.createInnerJoinNode(), ImmutableList.copyOf(children));
-        Variable v0 = TERM_FACTORY.getVariable("v0");
-        Variable v1 = TERM_FACTORY.getVariable("v1");
         DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
-                ANS1_AR2_PREDICATE, v0, v1);
+                ANS1_AR2_PREDICATE, A, B);
         ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
         UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
         IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
@@ -155,8 +156,8 @@ public class SameSourceMergeOptimizerTest {
         IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
         assertEquals(2, countExtensionalNodes(initialQuery.getTree()));
         IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
-        // Now merged: bare ExtData nodes are accepted as merge candidates
-        assertEquals(1, countExtensionalNodes(result.getTree()));
+        // Different, non-equivalent variables and no join equality -> must NOT merge
+        assertEquals(2, countExtensionalNodes(result.getTree()));
     }
 
     @Test
@@ -180,10 +181,12 @@ public class SameSourceMergeOptimizerTest {
         ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
                 T1_AR5, ImmutableMap.of(0, A, 1, B));
         ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
-                T1_AR5, ImmutableMap.of(0, C, 1, D));
+                T1_AR5, ImmutableMap.of(0, C, 2, D));
         ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
         ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
-        ImmutableExpression condition = TERM_FACTORY.getDBIsNotNull(A);
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getDBIsNotNull(A),
+                TERM_FACTORY.getStrictEquality(A, C));
         InnerJoinNode joinNode = IQ_FACTORY.createInnerJoinNode(condition);
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
                 joinNode,
@@ -279,10 +282,10 @@ public class SameSourceMergeOptimizerTest {
     }
 
     @Test
-    public void testSameKeySetDifferentVarsStrictMerged() {
-        // Same (relationDef, keySet={0,5}) but different construction variables
-        // -> strict merge applies (doesn't check variable equality condition)
-        // -> produces 1 ExtData
+    public void testSameKeySetDifferentVarsNotMerged() {
+        // Same (relationDef, keySet={0,5}) but DIFFERENT construction variables and no
+        // equality in the join condition -> the two nodes denote different rows
+        // -> must NOT be merged (produces 2 ExtData)
         ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
                 T1_AR5, ImmutableMap.of(0, A, 5, B));
         ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
@@ -301,8 +304,8 @@ public class SameSourceMergeOptimizerTest {
         IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
         assertEquals(2, countExtensionalNodes(initialQuery.getTree()));
         IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
-        // Same keySet {0,5} -> strict merge applies -> 1 ExtData
-        assertEquals(1, countExtensionalNodes(result.getTree()));
+        // Different, non-equivalent variables at the common positions -> must NOT merge
+        assertEquals(2, countExtensionalNodes(result.getTree()));
     }
 
     @Test
@@ -343,8 +346,12 @@ public class SameSourceMergeOptimizerTest {
         ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
         ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, D));
         ConstructionNode constr3 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(E, F));
+        // A = C AND B = D make the strict group (dataNode1, dataNode2) safe to merge
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getStrictEquality(A, C),
+                TERM_FACTORY.getStrictEquality(B, D));
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
-                IQ_FACTORY.createInnerJoinNode(),
+                IQ_FACTORY.createInnerJoinNode(condition),
                 ImmutableList.of(
                         IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
                         IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
@@ -452,8 +459,12 @@ public class SameSourceMergeOptimizerTest {
         IQTree unmergeableChild = IQ_FACTORY.createUnaryIQTree(wrapper,
                 IQ_FACTORY.createUnaryIQTree(constr3, dataNode3));
 
+        // A = C AND B = D make the two mergeable children (same row) safe to merge
+        ImmutableExpression condition = TERM_FACTORY.getConjunction(
+                TERM_FACTORY.getStrictEquality(A, C),
+                TERM_FACTORY.getStrictEquality(B, D));
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
-                IQ_FACTORY.createInnerJoinNode(),
+                IQ_FACTORY.createInnerJoinNode(condition),
                 ImmutableList.of(
                         IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
                         IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
@@ -534,8 +545,10 @@ public class SameSourceMergeOptimizerTest {
         ConstructionNode constr3 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, C));
         ConstructionNode constr4 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(idVar, D));
 
+        // A = B makes the strict group (child0, child1) safe to merge
+        ImmutableExpression condition = TERM_FACTORY.getStrictEquality(A, B);
         NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
-                IQ_FACTORY.createInnerJoinNode(),
+                IQ_FACTORY.createInnerJoinNode(condition),
                 ImmutableList.of(
                         IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
                         IQ_FACTORY.createUnaryIQTree(constr2, dataNode2),
@@ -650,8 +663,43 @@ public class SameSourceMergeOptimizerTest {
                 filterCondition.flattenAND().findAny().isPresent());
     }
 
+    @Test
+    public void testSelfJoinOnDifferentColumnsNotMerged() {
+        // Self-join over the same relation, joined on DIFFERENT columns:
+        //   s.parent_material_code (position 2) = d.material_code (position 3)
+        // The two aliases denote DIFFERENT rows, so they must NOT be merged into a
+        // single node (which would turn s.col2 = d.col3 into v.col2 = v.col3).
+        ExtensionalDataNode dataNode1 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, A, 2, B));
+        ExtensionalDataNode dataNode2 = IQ_FACTORY.createExtensionalDataNode(
+                T1_AR5, ImmutableMap.of(0, C, 3, E));
+
+        ConstructionNode constr1 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(A, B));
+        ConstructionNode constr2 = IQ_FACTORY.createConstructionNode(ImmutableSet.of(C, E));
+
+        ImmutableExpression condition = TERM_FACTORY.getStrictEquality(B, E);
+        InnerJoinNode joinNode = IQ_FACTORY.createInnerJoinNode(condition);
+
+        NaryIQTree joinTree = IQ_FACTORY.createNaryIQTree(
+                joinNode,
+                ImmutableList.of(
+                        IQ_FACTORY.createUnaryIQTree(constr1, dataNode1),
+                        IQ_FACTORY.createUnaryIQTree(constr2, dataNode2)));
+
+        DistinctVariableOnlyDataAtom projectionAtom = ATOM_FACTORY.getDistinctVariableOnlyDataAtom(
+                ANS1_AR2_PREDICATE, A, C);
+        ConstructionNode topConstructionNode = IQ_FACTORY.createConstructionNode(projectionAtom.getVariables());
+        UnaryIQTree constructionTree = IQ_FACTORY.createUnaryIQTree(topConstructionNode, joinTree);
+        IQ initialQuery = IQ_FACTORY.createIQ(projectionAtom, constructionTree);
+
+        assertEquals(2, countExtensionalNodes(initialQuery.getTree()));
+
+        IQ result = SAME_SOURCE_MERGE_OPTIMIZER.optimize(initialQuery);
+        assertEquals("Self-join on different columns must NOT be merged", 2,
+                countExtensionalNodes(result.getTree()));
+    }
+
     private static int countExtensionalNodes(IQTree tree) {
         return (int) new ExtensionalDataNodeExtractor().transform(tree).count();
     }
-
 }

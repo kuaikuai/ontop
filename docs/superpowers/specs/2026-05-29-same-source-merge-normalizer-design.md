@@ -336,3 +336,111 @@ mvn test -pl test/lightweight-tests
 |------|------|------|
 | v1.0 | 2026-05-29 | 初始版本 |
 | v1.1 | 2026-05-29 | Momus 评审修订: 模块边界→core/optimization、合并语义(id IS NOT NULL)、排除条件、substitution 冲突规则、回归测试扩展 |
+
+---
+
+## 10. 实现细节补充（2026-06-02）
+
+> 以下内容为实现后发现的设计要点，未在原方案中预见到。
+
+### 10.1 为什么要求"共同位置"（Common Positions）
+
+合并两个 children 的本质是让它们共享**同一个 SQL 查询**。如果它们引用的列完全不一样（position 不重叠），合并后会导致：
+
+- **列别名冲突**：同一 position 在不同 child 有不同语义，合并后无法确定绑定到哪个变量
+- **SQL 语义错误**：mergedExtData 的 `argumentMap` 无法同时满足两个 children 的不同需求
+
+**具体例子**：
+```
+Child1: position 6 → var A, position 7 → var B
+Child2: position 8 → var C, position 9 → var D
+        ↑
+        无共同位置！position 6,7,8,9 全部互不相交
+```
+
+若强行合并，mergedExtData 的 position 6 应该绑定 A 还是 C？语义不清。
+
+### 10.2 两阶段合并策略（Strict vs Relaxed Merge）
+
+实现中发现，仅用 strict merge（要求 keySet 完全相同）不够灵活。扩展为两阶段：
+
+**Phase 1: Strict Merge**（严格合并）
+- 分组依据：`(RelationDefinition, keySet)` — 必须**完全相同**
+- 要求：所有 children 的 `argumentMap.keySet()` 一模一样
+- 适用场景：OBDA 展开的典型情况（多 mapping 展开，每个子查询选择相同列）
+
+**Phase 2: Relaxed Merge**（宽松合并）
+- 分组依据：仅 `RelationDefinition` — keySet 可以不同
+- 触发条件：
+  1. 共同位置（keySet 交集）非空
+  2. 共同位置的变量通过 join condition **等价**（如 `A = C`）
+  3. 非共同位置**互不相交**（无 position 冲突）
+- 适用场景：同 IRI 但选择不同列的 children（如 `analysisSummaryAbnormalRuleDesc` position 6 和 `analysisSummaryPainPointName` position 8）
+
+### 10.3 变量等价检测
+
+通过 join condition 中的等值表达式建立变量等价图：
+
+```java
+// 从 InnerJoinNode 的 filter condition 提取
+condition.get().flattenAND()
+    .filter(expr -> expr.isVar2VarEquality())  // DBStrictEqFunctionSymbol
+    .forEach(expr -> {
+        Variable v1 = (Variable) expr.getTerm(0);
+        Variable v2 = (Variable) expr.getTerm(1);
+        // v1 = v2
+    });
+
+// 传递闭包：A=C 且 C=D → A=D
+computeConnectedComponent(start, directPairs);  // DFS
+```
+
+**示例**：
+```
+JOIN STRICT_EQ2(CAST(v1.id AS CHAR), CAST(v2.id AS CHAR))
+    STRICT_EQ2(CAST(v2.id AS CHAR), CAST(v3.id AS CHAR))
+    ...
+```
+→ 提取出 `v1 = v2, v2 = v3` → 传递闭包得 `v1 = v2 = v3`
+
+### 10.4 `canMergeSafely()` 的三个安全检查
+
+```java
+// 检查1: 必须有共同位置
+commonPositions = intersection(args₁.keySet, args₂.keySet, ...)
+if (commonPositions.isEmpty()) return false;
+
+// 检查2: 共同位置必须使用等价变量
+// position P 在 child0 映射到 A，在 child1 映射到 C
+// 只有 A = C（通过 join condition）时才安全合并
+if (!areVariablesEquivalent(A, C, equivalenceClasses)) return false;
+
+// 检查3: 非共同位置必须互不相交
+// position P 在 child0 和 child1 都出现，但不在 commonSet 中
+// → 意味着两个 child 都选了同一列用于不同目的，不能合并
+```
+
+### 10.5 为什么之前 Ontop 没有这个优化
+
+| 原因 | 说明 |
+|------|------|
+| **特定场景触发** | 用户的 SPARQL 查询使用 `;` 共享主语语法 + OBDA mapping 展开，触发 N 个相同子查询自连接 |
+| **现有 SelfJoin 不适用** | 现有优化器在 `ExtensionalDataNode` 级别工作，依赖 `Variable.equals()` 对象相等；展开时每次调用 `getFreshInstance()` 重命名变量，导致永远不相等 |
+| **设计优先级** | Ontop 已有 SelfJoinUCIQOptimizer、SelfJoinSameTermIQOptimizer 等，但它们处理的是"同一变量在两个 ExtData 中出现"的情况，不处理"不同变量绑定到相同 id 列"的情况 |
+| **你自己实现** | SameSourceMergeOptimizer 是你在 2026-06-01 新实现的功能，之前不存在于 Ontop 代码库 |
+
+### 10.6 Git 历史（关键 Commits）
+
+| Commit | 日期 | 消息 |
+|--------|------|------|
+| `53b42a41c1` | 2026-06-01 | feat: add SameSourceMergeOptimizer skeleton |
+| `1bd492950c` | 2026-06-01 | feat: implement SameSourceMergeOptimizer core merge logic |
+| `c3acfabe00` | 2026-06-01 | fix: remove IS_NOT_NULL filter from merge result |
+| `9a101d9c2c` | 2026-06-01 | fix: relax SameSourceMergeOptimizer to allow merge when common positions use equivalent variables |
+| `bf34772007` | 2026-06-01 | fix: improve variable equivalence detection to handle more equality formats |
+| `5ef8f57721` | 2026-06-01 | fix: extract variable names from qualified expressions |
+| `e49b23186b` | 2026-06-01 | fix: improve variable extraction from equality expressions |
+| `11c5134d57` | 2026-06-01 | refactor: rewrite variable equivalence detection using type-safe expression AST |
+| `9f09ea432a` | 2026-06-01 | refactor: improve SameSourceMergeOptimizer merge logic robustness |
+
+**注意**：所有 commits 都在同一天（2026-06-01），全部由同一作者实现。这是**新功能**，不是已有代码的 bug 修复。

@@ -143,11 +143,14 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
             List<MergeCandidate> remainingSingletons = new ArrayList<>();
 
             for (List<MergeCandidate> group : strictGroups.values()) {
-                if (group.size() > 1) {
+                if (group.size() > 1 && !hasCrossPositionEquality(group, joinNode)
+                        && canMergeSafely(group, joinNode)) {
                     mergedChildren.add(mergeGroup(group));
                     LOGGER.info("SameSourceMerge: strict merge applied to {} children", group.size());
                 } else {
-                    remainingSingletons.add(group.get(0));
+                    // A singleton, or a self-join between different rows:
+                    // leave the candidates independent (they must not be merged).
+                    remainingSingletons.addAll(group);
                 }
             }
 
@@ -160,7 +163,8 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                 }
 
                 for (List<MergeCandidate> group : relaxedGroups.values()) {
-                    if (group.size() > 1 && canMergeSafely(group, joinNode)) {
+                    if (group.size() > 1 && !hasCrossPositionEquality(group, joinNode)
+                            && canMergeSafely(group, joinNode)) {
                         mergedChildren.add(mergeGroup(group));
                         LOGGER.info("SameSourceMerge: relaxed merge applied to {} children", group.size());
                     } else {
@@ -236,6 +240,49 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                     ImmutableList.copyOf(mergedChildren)));
         }
 
+        /**
+         * Detects a self-join between DIFFERENT rows: the join condition equates a
+         * column of one candidate with a DIFFERENT column of another candidate
+         * (e.g. {@code s.parent_material_code = d.material_code}, positions 2 vs 3).
+         * Merging such candidates into a single node would rewrite the condition as
+         * {@code v.col2 = v.col3}, which is unsound.
+         */
+        private boolean hasCrossPositionEquality(List<MergeCandidate> candidates, InnerJoinNode joinNode) {
+            Optional<ImmutableExpression> condition = joinNode.getOptionalFilterCondition();
+            if (!condition.isPresent())
+                return false;
+
+            // variable -> list of (candidate index, column position)
+            Map<Variable, List<int[]>> varPositions = new HashMap<>();
+            for (int i = 0; i < candidates.size(); i++) {
+                for (Map.Entry<Integer, ? extends VariableOrGroundTerm> e
+                        : candidates.get(i).extDataNode.getArgumentMap().entrySet()) {
+                    if (e.getValue() instanceof Variable) {
+                        varPositions.computeIfAbsent((Variable) e.getValue(), k -> new ArrayList<>())
+                                .add(new int[]{i, e.getKey()});
+                    }
+                }
+            }
+
+            return condition.get().flattenAND()
+                    .filter(expr -> expr.getFunctionSymbol() instanceof DBStrictEqFunctionSymbol
+                            && expr.getTerms().size() == 2)
+                    .anyMatch(expr -> {
+                        Optional<Variable> v1 = extractVariableFromTerm(expr.getTerm(0));
+                        Optional<Variable> v2 = extractVariableFromTerm(expr.getTerm(1));
+                        if (!v1.isPresent() || !v2.isPresent())
+                            return false;
+                        for (int[] p1 : varPositions.getOrDefault(v1.get(), Collections.emptyList())) {
+                            for (int[] p2 : varPositions.getOrDefault(v2.get(), Collections.emptyList())) {
+                                if (p1[0] != p2[0] && p1[1] != p2[1]) {
+                                    return true;
+                                }
+                            }
+                        }
+                        return false;
+                    });
+        }
+
         private boolean canMergeSafely(List<MergeCandidate> candidates, InnerJoinNode joinNode) {
             if (candidates.size() <= 1) return false;
 
@@ -269,23 +316,14 @@ public class SameSourceMergeOptimizer extends AbstractIQOptimizer implements IQO
                     if (positionToVar.containsKey(pos)) {
                         VariableOrGroundTerm existingVar = positionToVar.get(pos);
                         if (!existingVar.equals(var)) {
-                            // Different variables at same position - check if they're equivalent.
-                            // If either variable is in the equivalence classes (from join equality conditions),
-                            // they must be equivalent. If neither is in any equivalence class, they are
-                            // non-key columns (e.g. filter columns like is_delete) and can be safely
-                            // resolved by putIfAbsent during merge.
-                            boolean existingInEq = existingVar instanceof Variable 
-                                    && equivalenceClasses.containsKey((Variable) existingVar);
-                            boolean currentInEq = var instanceof Variable 
-                                    && equivalenceClasses.containsKey((Variable) var);
-
-                            if (existingInEq || currentInEq) {
-                                if (!areVariablesEquivalent(existingVar, var, equivalenceClasses)) {
-                                    LOGGER.info("SameSourceMerge: common position {} maps to non-equivalent variables, refusing merge", pos);
-                                    return false;
-                                }
+                            // Different variables at the same position: merging is only sound
+                            // if they are provably equivalent (same variable or join-equated).
+                            // There is NO safe "skip" for non-key columns: two same-source nodes
+                            // joined without equality denote different rows.
+                            if (!areVariablesEquivalent(existingVar, var, equivalenceClasses)) {
+                                LOGGER.info("SameSourceMerge: common position {} maps to non-equivalent variables, refusing merge", pos);
+                                return false;
                             }
-                            // else: both variables are non-key (no join equality), skip equivalence check
                         }
                     }
                     positionToVar.put(pos, var);
