@@ -70,4 +70,30 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
             assertEquals("M1", rs.getString(2));
         }
     }
+
+    @Test
+    public void traversalFilterPrunesEveryLevel() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor ?bom_version WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "  ?ancestor path:traversalFilter true .\n" +
+                "  ?ancestor :bom_version ?bom_version .\n" +
+                "  FILTER(?bom_version = 1)\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("PRUNE-SQL:\n" + sql);
+
+        assertTrue("expected the pruning condition on every level:\n" + sql,
+                sql.toLowerCase().contains("where")
+                        && sql.toLowerCase().contains("bom_version"));
+
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals("1", rs.getString(1));
+            assertEquals("1", rs.getString(2));
+        }
+    }
 }

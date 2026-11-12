@@ -3,8 +3,8 @@
 
 [MappingDeclaration] @collection [[
 mappingId	classMapping
-target		:bom_item/{id} a :bom_item ; :bom_item_id {bom_item_id} ; :material_code {material_code} ; :parent_material_code {parent_material_code} .
-source		select bom_item_id as id, bom_item_id, material_code, parent_material_code from parent_bom
+target		:bom_item/{id} a :bom_item ; :bom_item_id {bom_item_id} ; :material_code {material_code} ; :parent_material_code {parent_material_code} ; :bom_version {bom_version}^^xsd:integer .
+source		select bom_item_id as id, bom_item_id, material_code, parent_material_code, bom_version from parent_bom
 
 mappingId	parentBomItem
 target		:bom_item/{src_key} :parent_bom_item :bom_item/{dst_key} .

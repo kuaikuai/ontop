@@ -6,3 +6,4 @@
 :bom_item_id a owl:DatatypeProperty .
 :material_code a owl:DatatypeProperty .
 :parent_material_code a owl:DatatypeProperty .
+:bom_version a owl:DatatypeProperty .

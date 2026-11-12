@@ -29,6 +29,7 @@ import it.unibz.inf.ontop.model.vocabulary.SPARQL;
 import it.unibz.inf.ontop.model.template.Template;
 import it.unibz.inf.ontop.model.vocabulary.XSD;
 import it.unibz.inf.ontop.query.translation.path.HierarchySqlBuilder;
+import it.unibz.inf.ontop.query.translation.path.SparqlConditionSqlSerializer;
 import it.unibz.inf.ontop.query.translation.path.PathQueryContext;
 import it.unibz.inf.ontop.query.translation.path.PathQuerySupport;
 import it.unibz.inf.ontop.query.translation.path.SeedSource;
@@ -77,6 +78,10 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
     private final Map<String, String> sinkPropertyVariables = new HashMap<>();
+    private final Map<String, Boolean> pathTraversalEnabled = new HashMap<>();
+    private final Map<String, String> traversalSqlConditions = new HashMap<>();
+    private final Set<ValueExpr> consumedTraversalConditions =
+            Collections.newSetFromMap(new IdentityHashMap<>());
 
     public RDF4JTupleExprTranslator(ImmutableMap<Variable, GroundTerm> externalBindings,
                                     @Nullable Dataset dataset,
@@ -103,6 +108,7 @@ public class RDF4JTupleExprTranslator {
     public IQTree getTree(TupleExpr node) throws OntopUnsupportedKGQueryException, OntopInvalidKGQueryException {
         collectPathTerminals(node);
         collectPathMetadata(node);
+        collectTraversalConditions(node);
         return translate(node).iqTree;
     }
 
@@ -371,14 +377,19 @@ public class RDF4JTupleExprTranslator {
         String startIri = path.getSubjectVar().getValue().stringValue();
         Integer maxDepth = pathMaxDepth.get(startIri);
         if (maxDepth == null) {
-            System.err.println("[PathSpec] no path:maxDepth for start " + startIri
-                    + " (collected subjects: " + pathMaxDepth.keySet() + ")");
             return null;
         }
         int minDepth = pathMinDepth.getOrDefault(startIri, 1);
         PathSpec spec = specOptional.get();
+        Optional<PathSpec.TraversalFilter> dynamicFilter = Optional.empty();
+        if (Boolean.TRUE.equals(pathTraversalEnabled.get(objectName))
+                && traversalSqlConditions.containsKey(objectName)) {
+            dynamicFilter = Optional.of(new PathSpec.TraversalFilter(
+                    Optional.empty(), Optional.of(traversalSqlConditions.get(objectName)), false));
+        }
+        Optional<PathSpec.TraversalFilter> mergedFilter = mergeFilters(spec.traversalFilter(), dynamicFilter);
         String sql = new HierarchySqlBuilder().build(
-                spec, new SeedSource.Constant(startIri), minDepth, maxDepth, spec.traversalFilter());
+                spec, new SeedSource.Constant(startIri), minDepth, maxDepth, mergedFilter);
         String nodeKeyType = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).nodeKeyType() : null;
         java.util.Collection<String> nodeColumns = (spec instanceof PathSpec.Self)
                 ? ((PathSpec.Self) spec).nodeColumns().values().stream().distinct().collect(java.util.stream.Collectors.toList())
@@ -437,6 +448,61 @@ public class RDF4JTupleExprTranslator {
         return createTranslationResult(pathTree, ImmutableSet.of());
     }
 
+    private void collectTraversalConditions(QueryModelNode node) {
+        if (node instanceof Filter) {
+            processTraversalCondition(((Filter) node).getCondition());
+        }
+        if (node instanceof BinaryTupleOperator) {
+            collectTraversalConditions(((BinaryTupleOperator) node).getLeftArg());
+            collectTraversalConditions(((BinaryTupleOperator) node).getRightArg());
+        } else if (node instanceof UnaryTupleOperator) {
+            collectTraversalConditions(((UnaryTupleOperator) node).getArg());
+        }
+    }
+
+    private void processTraversalCondition(ValueExpr condition) {
+        for (Map.Entry<String, PathSpec> entry : pathTerminalSpecs.entrySet()) {
+            String terminal = entry.getKey();
+            if (!Boolean.TRUE.equals(pathTraversalEnabled.get(terminal)))
+                continue;
+            if (!(entry.getValue() instanceof PathSpec.Self))
+                continue;
+            PathSpec.Self self = (PathSpec.Self) entry.getValue();
+            Map<String, String> variableToSql = new HashMap<>();
+            for (Map.Entry<String, String> e : self.nodeColumns().entrySet()) {
+                String variableName = sinkPropertyVariables.get(e.getKey());
+                if (variableName != null)
+                    variableToSql.put(variableName, "p." + e.getValue());
+            }
+            if (variableToSql.isEmpty())
+                continue;
+            try {
+                String sql = new SparqlConditionSqlSerializer(variableToSql).serialize(condition);
+                traversalSqlConditions.put(terminal, sql);
+                consumedTraversalConditions.add(condition);
+            } catch (OntopUnsupportedKGQueryException ignored) {
+            }
+        }
+    }
+
+    private Optional<PathSpec.TraversalFilter> mergeFilters(
+            Optional<PathSpec.TraversalFilter> first, Optional<PathSpec.TraversalFilter> second) {
+        if (!first.isPresent())
+            return second;
+        if (!second.isPresent())
+            return first;
+        PathSpec.TraversalFilter left = first.get();
+        PathSpec.TraversalFilter right = second.get();
+        Optional<String> where;
+        if (left.where().isPresent() && right.where().isPresent())
+            where = Optional.of("(" + left.where().get() + ") AND (" + right.where().get() + ")");
+        else
+            where = left.where().isPresent() ? left.where() : right.where();
+        Optional<String> join = left.join().isPresent() ? left.join() : right.join();
+        return Optional.of(new PathSpec.TraversalFilter(join, where,
+                left.applyToStart() || right.applyToStart()));
+    }
+
     private boolean isPathMetadataPredicate(StatementPattern pattern) {
         return pattern.getPredicateVar().getValue() instanceof IRI
                 && pattern.getPredicateVar().getValue().stringValue().startsWith(PATH_NS);
@@ -492,6 +558,12 @@ public class RDF4JTupleExprTranslator {
                     } else if (predicate.equals(PATH_NS + "predecessor")) {
                         String object = sp.getObjectVar().getName();
                         if (object != null) pathPredecessorVariable.put(subject, object);
+                    } else if (predicate.equals(PATH_NS + "traversalFilter")) {
+                        String subjectName = sp.getSubjectVar().getName();
+                        if (subjectName != null
+                                && sp.getObjectVar().getValue() instanceof org.eclipse.rdf4j.model.Literal
+                                && ((org.eclipse.rdf4j.model.Literal) sp.getObjectVar().getValue()).booleanValue())
+                            pathTraversalEnabled.put(subjectName, true);
                     }
                 }
                 String subjectName = sp.getSubjectVar().getName();
@@ -604,6 +676,9 @@ public class RDF4JTupleExprTranslator {
     }
 
     private TranslationResult translate(Filter filter) throws OntopInvalidKGQueryException, OntopUnsupportedKGQueryException {
+        if (consumedTraversalConditions.contains(filter.getCondition()))
+            return translate(filter.getArg());
+
         TranslationResult child = translate(filter.getArg());
 
         ValueExpr condition = filter.getCondition();
