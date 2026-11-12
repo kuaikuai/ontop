@@ -67,24 +67,54 @@ public final class PathSpecDeriver {
         Map<String, Map<String, String>> tableColumns = new HashMap<>();
         for (RDFAtomPredicate predicate : mapping.getRDFAtomPredicates()) {
             for (IRI iri : mapping.getRDFProperties(predicate)) {
-                mapping.getRDFPropertyDefinition(predicate, iri)
-                        .flatMap(PathSpecDeriver::derivePropertyColumn)
-                        .ifPresent(propertyColumn -> tableColumns
-                                .computeIfAbsent(propertyColumn.table, k -> new HashMap<>())
-                                .put(iri.getIRIString(), propertyColumn.column));
+                List<PropertyColumn> propertyColumns = mapping.getRDFPropertyDefinition(predicate, iri)
+                        .map(PathSpecDeriver::derivePropertyColumns)
+                        .orElse(Collections.emptyList());
+                for (PropertyColumn propertyColumn : propertyColumns) {
+                    tableColumns.computeIfAbsent(propertyColumn.table, k -> new HashMap<>())
+                            .put(iri.getIRIString(), propertyColumn.column);
+                }
             }
         }
         return tableColumns;
     }
 
-    private static Optional<PropertyColumn> derivePropertyColumn(IQ iq) {
+    private static List<PropertyColumn> derivePropertyColumns(IQ iq) {
         DataAtom<AtomPredicate> atom = iq.getProjectionAtom();
         List<? extends VariableOrGroundTerm> args = atom.getArguments();
         if (args.size() < 3 || !(args.get(2) instanceof Variable))
-            return Optional.empty();
+            return Collections.emptyList();
         Variable objectVariable = (Variable) args.get(2);
 
-        var constructionDecomposition = UnaryIQTreeDecomposition.of(iq.getTree(), ConstructionNode.class);
+        IQTree tree = iq.getTree();
+        var topConstruction = UnaryIQTreeDecomposition.of(tree, ConstructionNode.class);
+        IQTree body = topConstruction.isPresent() ? topConstruction.getChild() : tree;
+
+        // The top-level object may be wrapped (e.g. RDF(VARCHARToTEXT(var))); the Union
+        // branches use the underlying variable, so unwrap it before matching columns.
+        Variable targetObjectVariable = objectVariable;
+        if (topConstruction.isPresent()) {
+            Optional<Variable> unwrapped = unwrapColumn(
+                    topConstruction.getNode().getSubstitution().apply(objectVariable));
+            if (unwrapped.isPresent())
+                targetObjectVariable = unwrapped.get();
+        }
+
+        var unionDecomposition = NaryIQTreeTools.UnionDecomposition.of(body);
+        if (unionDecomposition.isPresent()) {
+            List<PropertyColumn> result = new java.util.ArrayList<>();
+            for (IQTree child : unionDecomposition.getChildren()) {
+                deriveSinglePropertyColumn(child, targetObjectVariable).ifPresent(result::add);
+            }
+            return result;
+        }
+        return deriveSinglePropertyColumn(tree, targetObjectVariable)
+                .map(Collections::singletonList)
+                .orElse(Collections.emptyList());
+    }
+
+    private static Optional<PropertyColumn> deriveSinglePropertyColumn(IQTree tree, Variable objectVariable) {
+        var constructionDecomposition = UnaryIQTreeDecomposition.of(tree, ConstructionNode.class);
         if (!constructionDecomposition.isPresent())
             return Optional.empty();
         ConstructionNode construction = constructionDecomposition.getNode();
@@ -123,10 +153,10 @@ public final class PathSpecDeriver {
         ConstructionNode construction = constructionDecomposition.getNode();
         IQTree child = constructionDecomposition.getChild();
 
-        var joinDecomposition = NaryIQTreeTools.InnerJoinDecomposition.of(child);
-        if (!joinDecomposition.isPresent())
+        var joinChildren = findJoinChildren(child);
+        if (!joinChildren.isPresent())
             return Optional.empty();
-        ImmutableList<IQTree> children = joinDecomposition.getChildren();
+        ImmutableList<IQTree> children = joinChildren.get();
         if (children.size() != 2)
             return Optional.empty();
         if (!(children.get(0) instanceof ExtensionalDataNode) || !(children.get(1) instanceof ExtensionalDataNode))
@@ -180,6 +210,15 @@ public final class PathSpecDeriver {
                 subjectTemplate.get().prefix,
                 nodeColumns,
                 Optional.empty()));
+    }
+
+    private static Optional<ImmutableList<IQTree>> findJoinChildren(IQTree tree) {
+        var joinDecomposition = NaryIQTreeTools.InnerJoinDecomposition.of(tree);
+        if (joinDecomposition.isPresent())
+            return Optional.of(joinDecomposition.getChildren());
+        if (tree instanceof UnaryIQTree)
+            return findJoinChildren(((UnaryIQTree) tree).getChild());
+        return Optional.empty();
     }
 
     private static ExtensionalDataNode findExtensional(IQTree tree) {

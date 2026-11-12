@@ -390,6 +390,7 @@ public class RDF4JTupleExprTranslator {
         argumentMap.put(0, rawNode);
         ImmutableSet.Builder<Variable> projectedVariables = ImmutableSet.builder();
         projectedVariables.add(nodeVariable);
+        Map<Variable, ImmutableTerm> attributeSubstitutions = new HashMap<>();
         if (spec instanceof PathSpec.Self) {
             Map<String, String> columnToVariable = new HashMap<>();
             for (Map.Entry<String, String> e : ((PathSpec.Self) spec).nodeColumns().entrySet()) {
@@ -397,13 +398,19 @@ public class RDF4JTupleExprTranslator {
                 if (variableName != null)
                     columnToVariable.putIfAbsent(e.getValue(), variableName);
             }
+            // PathRelationDefinition columns: 0 = node_iri, 1 = depth, 2 = predecessor.
+            // Sunk node attributes therefore start at index 3 (must stay in sync with
+            // PathQuerySupportImpl.toRelation, which appends them after these three columns).
             int index = 3;
             for (String column : nodeColumns) {
                 String variableName = columnToVariable.get(column);
                 if (variableName != null) {
+                    Variable rawAttribute = termFactory.getVariable(variableName + "_raw");
+                    argumentMap.put(index, rawAttribute);
                     Variable attributeVariable = termFactory.getVariable(variableName);
-                    argumentMap.put(index, attributeVariable);
                     projectedVariables.add(attributeVariable);
+                    attributeSubstitutions.put(attributeVariable,
+                            termFactory.getRDFLiteralFunctionalTerm(rawAttribute, typeFactory.getXsdStringDatatype()));
                 }
                 index++;
             }
@@ -415,9 +422,17 @@ public class RDF4JTupleExprTranslator {
                 .placeholder()
                 .build();
         ImmutableFunctionalTerm iriTerm = termFactory.getIRIFunctionalTerm(template, ImmutableList.of(rawNode));
+        ImmutableList.Builder<Variable> substitutionVariables = ImmutableList.builder();
+        ImmutableList.Builder<ImmutableTerm> substitutionTerms = ImmutableList.builder();
+        attributeSubstitutions.forEach((variable, term) -> {
+            substitutionVariables.add(variable);
+            substitutionTerms.add(term);
+        });
+        substitutionVariables.add(nodeVariable);
+        substitutionTerms.add(iriTerm);
         ConstructionNode constructionNode = iqFactory.createConstructionNode(
                 projectedVariables.build(),
-                substitutionFactory.getSubstitution(nodeVariable, iriTerm));
+                substitutionFactory.getSubstitution(substitutionVariables.build(), substitutionTerms.build()));
         IQTree pathTree = iqFactory.createUnaryIQTree(constructionNode, dataNode);
         return createTranslationResult(pathTree, ImmutableSet.of());
     }

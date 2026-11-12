@@ -35,11 +35,8 @@ public final class PathSpecConfigLoader {
 
     public static void loadIfConfigured(PathSpecRegistry registry) {
         String path = System.getProperty(FILE_PROPERTY);
-        System.err.println("[PathSpec] " + FILE_PROPERTY + " = " + path);
-        if (path == null || path.trim().isEmpty()) {
-            System.err.println("[PathSpec] no config file: registry stays empty");
+        if (path == null || path.trim().isEmpty())
             return;
-        }
         load(registry, new File(path.trim()));
     }
 
@@ -67,10 +64,8 @@ public final class PathSpecConfigLoader {
                     required(properties, prefix + "iriPrefix"),
                     java.util.Collections.emptyMap(),
                     Optional.empty()));
-            System.err.println("[PathSpec] loaded predicate " + predicate);
             count++;
         }
-        System.err.println("[PathSpec] loaded " + count + " spec(s) from " + file);
     }
 
     private static String required(Properties properties, String key) {

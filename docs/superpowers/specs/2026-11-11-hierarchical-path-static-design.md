@@ -1,9 +1,63 @@
 # 实体间层级展开（不定跳路径）— 静态化方案设计
 
 **Date**: 2026-11-11
-**Status**: Deferred — IRI 后处理受阻；已转为 PathNode 方案（见 `2026-11-05-sparql-recursive-path-design.md`）。
+**Status**: Active — 已实现（v3.0）；零配置（PathSpecDeriver）与属性下沉已落地。
 **Supersedes**: `2026-11-05-sparql-recursive-path-design.md`（PathNode 深度方案转为备选/参考）
 **Author**: opencode (AI-assisted)
+
+## 实现补充（v3.0）
+
+本节记录 v2.0 之后实际落地的设计变更（代码已提交）。
+
+### PathSpec 字段扩展
+
+- `nodeKeyType`：节点 key 的 DB 类型（如 `BIGINT` / `VARCHAR`），由 `PathSpecDeriver` 从关系列类型自动取，或配置指定。
+- `nodeColumns`：节点属性 IRI → 物理列，用于把同表属性下沉到路径 CTE。
+
+### SQL 形态
+
+- `HierarchySqlBuilder` 生成**链式 CTE**（Doris 支持 `(WITH ...) vN`）：
+
+  ```sql
+  WITH level_0 AS (...), level_1 AS (...), ..., level_N AS (...)
+  SELECT ... FROM level_{minDepth} UNION ALL ... level_N
+  ```
+
+- `node_iri` / `predecessor` 输出**原始 key 列**（不再 `CONCAT('', ...)`），与属性表 join 时无 `CAST`。
+- 起点字面量按 `nodeKeyType` 决定是否加引号（数值不加，字符串加）。
+- 每层 CTE 同时带出 `nodeColumns` 中的属性列，最终 `SELECT` 也投影它们。
+
+### PathRelationDefinition 列顺序
+
+| 索引 | 列 |
+|---|---|
+| 0 | `node_iri` |
+| 1 | `depth` |
+| 2 | `predecessor` |
+| 3.. | `nodeColumns`（下沉属性） |
+
+translator 的 `argumentMap` 从索引 3 开始绑定属性列，必须与 `toRelation` 的追加顺序保持一致。
+
+### 自动推导（PathSpecDeriver）
+
+启动期从 `OBDASpecification.getSaturatedMapping()` 自动推导，零配置：
+
+- **边推导**：穿透外层 `ConstructionNode` 下的 `DISTINCT` / 内层 `Construction` / `Filter`，找到 `InnerJoin` 的两个 `ExtensionalDataNode`（同一 relation、共享唯一 JOIN 变量）；提取 `table`、`nodeKeyColumn` / `nodeKeyType`、`joinKeyColumn`、`parentJoinKeyColumn`、`iriPrefix`。
+- **属性列推导**：从每个属性映射提取 `(table, column)`；支持 `Construction -> Union`（多来源属性），对每个 Union 分支提取，按 `table` 分组。边推导时只取与 `PathSpec.table` 匹配的属性（“以当前表为单位”）。
+- 手动 `path-spec.properties` 仍可用，且优先于自动推导。
+
+### 属性下沉（translator）
+
+- 收集 `?ancestor prop:X`（`X` 在 `spec.nodeColumns` 中）。
+- 该 triple 翻译成 `TrueNode`，`?X` 由路径 relation 的对应列提供。
+- `ConstructionNode` 投影 `?ancestor` 与所有下沉属性变量；下沉属性用 `RDFLiteral(raw, xsd:string)` 包装，避免结果层出现 DB 常量（`"..."^^TEXT`）。
+- 未在 `nodeColumns` 中的属性（跨表、复杂映射）仍走普通 join。
+
+### 边界
+
+- 边推导要求：单 relation self-join、两端同 IRI 前缀、共享唯一 JOIN 变量、IRI 模板参数可穿透到单列。
+- 属性下沉要求：属性在 `PathSpec.table` 有单列映射；多来源属性按表筛选；复杂映射跳过。
+- 异构边（person/company）、多表边仍为 Phase 2。
 
 ## 1. 背景与目标
 
@@ -602,3 +656,4 @@ public void upsert(PathSpec spec) {
 | v1.8 | 2026-11-11 | 属性→列改为启动期由 `PropertyColumnRegistry` 从 OBDA 自动派生；`filters` 降为复杂映射的可选人工覆盖，不再必填 |
 | v1.9 | 2026-11-11 | 评审修订：修正 `minDepth 0` 示例、`join_key`/`node_iri` 连接表述、`build` 签名统一 5 参、`iriTemplate` 术语；补剪枝自动派生边界、语义提升、FILTER 作用域、类型转换、数据流与 Phase 2 描述 |
 | v2.0 | 2026-11-11 | Phase 0 实测：查询期无 `MetadataLookup`、`getBlackBoxView` 不可用；改用 `PathRelationDefinition` + `PathQuerySupport` + ThreadLocal per-spec 上下文；明确 Java 11 / JUnit 5 约束 |
+| v3.0 | 2026-11-12 | 实现落地：链式 CTE（Doris）、原始 key + `nodeKeyType`、`PathSpecDeriver` 自动推导边与属性列、Union 分支按表筛选、DISTINCT/Construction 穿透、属性下沉 + `RDFLiteral` 构造 |

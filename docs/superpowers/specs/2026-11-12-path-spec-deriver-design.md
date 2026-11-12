@@ -167,3 +167,25 @@ PathSpecConfigLoader.loadIfConfigured(pathSpecRegistry);
 | `core/kg-query/.../path/HierarchySqlBuilder.java` | 方向约定（`joinKeyColumn` / `parentJoinKeyColumn`） |
 | `db/rdb/.../generation/.../DefaultSQLIQTree2NativeNodeGenerator.java` | 参考 IQ 解构方式 |
 | `docs/superpowers/analysis/hierarchical-path-phase0.md` | Phase 0 结论 |
+
+## 实现更新（v1.1）
+
+实际落地时相对第 4 节的补充：
+
+1. **边 IQ 形态穿透**：真实映射 IQ 是 `Construction -> DISTINCT -> Construction -> InnerJoin(两个 Extensional)`，不是 `Construction -> InnerJoin`。`derive` 先取顶层 `ConstructionNode`，再用 `findJoinChildren` 递归穿透 `DISTINCT` / 内层 `Construction` / `Filter` 找到 `InnerJoin`，然后才读取两个 `ExtensionalDataNode`。
+
+2. **属性列推导与 Union 分支**：`derivePropertyColumns` 先跳过顶层 `ConstructionNode`，若其为 `Union`（多来源属性，如 `material_code` 同时来自 BOM 表与 material 主数据表），对每个分支 `deriveSinglePropertyColumn`，返回多个 `(table, column)`。`collectTableColumns` 按 `table` 分组；边推导时只取与 `PathSpec.table` 相同的属性（“以当前表为单位”）。
+
+3. **节点属性下沉的 RDF 构造**：`PathSpecDeriver` 只负责推导 `nodeColumns`。真正把 `?ancestor prop:X` 下沉到路径 relation 的是 `RDF4JTupleExprTranslator`：
+   - 收集谓词在 `nodeColumns` 中的 triple，翻译成 `TrueNode`；
+   - 从路径 relation 的对应列绑定 `?X`；
+   - `ConstructionNode` 用 `RDFLiteral(raw, xsd:string)` 包装下沉属性，避免结果层出现 `"..."^^TEXT` DB 常量。
+
+4. **列索引约定**：`PathRelationDefinition` 的列顺序为 `node_iri`(0)、`depth`(1)、`predecessor`(2)、`nodeColumns`(3..)。translator 的 `argumentMap` 从索引 3 开始绑定属性列，必须与 `toRelation` 的追加顺序一致。
+
+### 修订记录
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v1.0 | 2026-11-12 | 初版：边推导设计 |
+| v1.1 | 2026-11-12 | 补充 DISTINCT/Construction 穿透、Union 属性列按表筛选、属性下沉 + RDFLiteral 构造、列索引约定 |
