@@ -2,8 +2,10 @@
 @prefix : <http://example.org/ontology#> .
 
 :bom_item a owl:Class .
+:material a owl:Class .
 :parent_bom_item a owl:ObjectProperty .
 :bom_item_id a owl:DatatypeProperty .
 :material_code a owl:DatatypeProperty .
 :parent_material_code a owl:DatatypeProperty .
 :bom_version a owl:DatatypeProperty .
+:material_name a owl:DatatypeProperty .

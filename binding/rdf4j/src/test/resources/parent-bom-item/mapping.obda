@@ -9,4 +9,8 @@ source		select bom_item_id as id, bom_item_id, material_code, parent_material_co
 mappingId	parentBomItem
 target		:bom_item/{src_key} :parent_bom_item :bom_item/{dst_key} .
 source		SELECT s.bom_item_id AS src_key, d.bom_item_id AS dst_key FROM parent_bom s INNER JOIN parent_bom d ON s.parent_material_code = d.material_code
+
+mappingId	materialClass
+target		:material/{material_code} a :material ; :material_code {material_code} ; :material_name {material_name} .
+source		select material_code, material_name from material
 ]]

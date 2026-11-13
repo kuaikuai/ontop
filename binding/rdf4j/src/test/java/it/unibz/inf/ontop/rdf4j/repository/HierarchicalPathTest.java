@@ -96,4 +96,41 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
             assertEquals("1", rs.getString(2));
         }
     }
+
+    @Test
+    public void plainJoinHasCondition() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "SELECT ?m ?n WHERE {\n" +
+                "  ?b a :bom_item ; :material_code ?m .\n" +
+                "  ?mat a :material ; :material_code ?m ; :material_name ?n .\n" +
+                "}";
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("PLAIN-SQL:\n" + sql);
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+        }
+    }
+
+    @Test
+    public void pathNodeJoinsAnotherRelation() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT DISTINCT ?ancestor ?material_code ?material_name WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "  ?ancestor path:traversalFilter true .\n" +
+                "  ?ancestor :material_code ?material_code .\n" +
+                "  ?material a :material ; :material_code ?material_code ; :material_name ?material_name .\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("JOIN-SQL:\n" + sql);
+
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals("M1", rs.getString(1));
+            assertEquals("1", rs.getString(2));
+            assertEquals("Mat1", rs.getString(3));
+        }
+    }
 }

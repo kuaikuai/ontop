@@ -509,8 +509,13 @@ public class RDF4JTupleExprTranslator {
     }
 
     private boolean isSinkProperty(StatementPattern pattern) {
-        return pattern.getPredicateVar().getValue() instanceof IRI
-                && sinkPropertyVariables.containsKey(pattern.getPredicateVar().getValue().stringValue());
+        if (!(pattern.getPredicateVar().getValue() instanceof IRI))
+            return false;
+        String predicate = pattern.getPredicateVar().getValue().stringValue();
+        if (!sinkPropertyVariables.containsKey(predicate))
+            return false;
+        String subjectName = pattern.getSubjectVar().getName();
+        return subjectName != null && pathTerminalSpecs.containsKey(subjectName);
     }
 
     private void collectPathTerminals(QueryModelNode node) {
