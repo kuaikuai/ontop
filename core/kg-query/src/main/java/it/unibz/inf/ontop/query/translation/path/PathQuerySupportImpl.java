@@ -51,6 +51,7 @@ public class PathQuerySupportImpl implements PathQuerySupport {
         builder.addAttribute(ids.createAttributeID("node_iri"), keyType, keyType.getName(), true);
         builder.addAttribute(ids.createAttributeID("depth"), stringType, stringType.getName(), false);
         builder.addAttribute(ids.createAttributeID("predecessor"), keyType, keyType.getName(), true);
+        builder.addAttribute(ids.createAttributeID("start_iri"), keyType, keyType.getName(), true);
         for (String column : nodeColumns) {
             builder.addAttribute(ids.createAttributeID(column), stringType, stringType.getName(), true);
         }

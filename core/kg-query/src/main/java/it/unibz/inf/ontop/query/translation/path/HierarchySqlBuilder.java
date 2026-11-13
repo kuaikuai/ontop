@@ -32,7 +32,8 @@ public class HierarchySqlBuilder {
         sb.append("level_0 AS (\n  SELECT ")
                 .append(self.nodeKeyColumn()).append(" AS node_iri, ")
                 .append(self.parentJoinKeyColumn()).append(" AS next_key, '0' AS depth, ")
-                .append(self.nodeKeyColumn()).append(" AS predecessor")
+                .append(self.nodeKeyColumn()).append(" AS predecessor, ")
+                .append(self.nodeKeyColumn()).append(" AS start_iri")
                 .append(extraSelect)
                 .append(" FROM ").append(self.table()).append(" ")
                 .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(self, seed))
@@ -46,7 +47,7 @@ public class HierarchySqlBuilder {
             sb.append(",\nlevel_").append(k).append(" AS (\n  SELECT ")
                     .append("p.").append(self.nodeKeyColumn()).append(" AS node_iri, ")
                     .append("p.").append(self.parentJoinKeyColumn()).append(" AS next_key, ")
-                    .append("'").append(k).append("' AS depth, l.node_iri AS predecessor")
+                    .append("'").append(k).append("' AS depth, l.node_iri AS predecessor, l.start_iri")
                     .append(extraParentSelect)
                     .append(" FROM ").append(self.table()).append(" p ")
                     .append("JOIN level_").append(k - 1)
@@ -55,7 +56,7 @@ public class HierarchySqlBuilder {
                     .append("\n)");
         }
 
-        String projectedColumns = "node_iri, depth, predecessor" + extraSelect;
+        String projectedColumns = "node_iri, depth, predecessor, start_iri" + extraSelect;
         sb.append("\nSELECT ").append(projectedColumns)
                 .append(" FROM level_").append(minDepth);
         for (int k = minDepth + 1; k <= maxDepth; k++) {

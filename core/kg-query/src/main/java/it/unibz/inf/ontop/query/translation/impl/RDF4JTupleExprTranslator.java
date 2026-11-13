@@ -40,6 +40,7 @@ import it.unibz.inf.ontop.utils.ImmutableCollectors;
 import it.unibz.inf.ontop.utils.VariableGenerator;
 import org.apache.commons.rdf.api.RDF;
 import org.eclipse.rdf4j.model.IRI;
+import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.query.Binding;
 import org.eclipse.rdf4j.query.Dataset;
 import org.eclipse.rdf4j.query.algebra.*;
@@ -76,6 +77,8 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, Integer> pathMinDepth = new HashMap<>();
     private final Map<String, String> pathDepthVariable = new HashMap<>();
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
+    private final Map<String, String> pathVariableId = new HashMap<>();
+    private final Map<String, String> pathVariableSeed = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
     private final Map<String, String> sinkPropertyVariables = new HashMap<>();
     private final Map<String, Boolean> pathTraversalEnabled = new HashMap<>();
@@ -369,18 +372,26 @@ public class RDF4JTupleExprTranslator {
             System.err.println("[PathSpec] no PathSpec registered for " + predicateIri);
             return null;
         }
-        if (!(path.getSubjectVar().getValue() instanceof IRI))
-            return null;
         String objectName = path.getObjectVar().getName();
         if (objectName == null)
             return null;
-        String startIri = path.getSubjectVar().getValue().stringValue();
-        Integer maxDepth = pathMaxDepth.get(startIri);
+        boolean variableStart = path.getSubjectVar().getValue() == null;
+        String startKey = subjectKey(path.getSubjectVar());
+        Integer maxDepth = startKey == null ? null : pathMaxDepth.get(startKey);
         if (maxDepth == null) {
             return null;
         }
-        int minDepth = pathMinDepth.getOrDefault(startIri, 1);
+        int minDepth = pathMinDepth.getOrDefault(startKey, 1);
         PathSpec spec = specOptional.get();
+        SeedSource seed;
+        if (variableStart) {
+            String seedKey = pathVariableSeed.get(path.getSubjectVar().getName());
+            if (seedKey == null)
+                return null;
+            seed = new SeedSource.Constant(seedKey);
+        } else {
+            seed = new SeedSource.Constant(path.getSubjectVar().getValue().stringValue());
+        }
         Optional<PathSpec.TraversalFilter> dynamicFilter = Optional.empty();
         if (Boolean.TRUE.equals(pathTraversalEnabled.get(objectName))
                 && traversalSqlConditions.containsKey(objectName)) {
@@ -389,7 +400,7 @@ public class RDF4JTupleExprTranslator {
         }
         Optional<PathSpec.TraversalFilter> mergedFilter = mergeFilters(spec.traversalFilter(), dynamicFilter);
         String sql = new HierarchySqlBuilder().build(
-                spec, new SeedSource.Constant(startIri), minDepth, maxDepth, mergedFilter);
+                spec, seed, minDepth, maxDepth, mergedFilter);
         String nodeKeyType = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).nodeKeyType() : null;
         java.util.Collection<String> nodeColumns = (spec instanceof PathSpec.Self)
                 ? ((PathSpec.Self) spec).nodeColumns().values().stream().distinct().collect(java.util.stream.Collectors.toList())
@@ -397,10 +408,16 @@ public class RDF4JTupleExprTranslator {
         RelationDefinition relation = support.toRelation(sql, nodeKeyType, nodeColumns);
         Variable rawNode = termFactory.getVariable(objectName + "_raw");
         Variable nodeVariable = termFactory.getVariable(objectName);
+        Variable rawStart = termFactory.getVariable("path_start_raw");
+        Variable startVariable = variableStart
+                ? termFactory.getVariable(path.getSubjectVar().getName())
+                : termFactory.getVariable("path_start");
         ImmutableMap.Builder<Integer, Variable> argumentMap = ImmutableMap.builder();
         argumentMap.put(0, rawNode);
+        argumentMap.put(3, rawStart);
         ImmutableSet.Builder<Variable> projectedVariables = ImmutableSet.builder();
         projectedVariables.add(nodeVariable);
+        projectedVariables.add(startVariable);
         Map<Variable, ImmutableTerm> attributeSubstitutions = new HashMap<>();
         if (spec instanceof PathSpec.Self) {
             Map<String, String> columnToVariable = new HashMap<>();
@@ -412,7 +429,7 @@ public class RDF4JTupleExprTranslator {
             // PathRelationDefinition columns: 0 = node_iri, 1 = depth, 2 = predecessor.
             // Sunk node attributes therefore start at index 3 (must stay in sync with
             // PathQuerySupportImpl.toRelation, which appends them after these three columns).
-            int index = 3;
+            int index = 4;
             for (String column : nodeColumns) {
                 String variableName = columnToVariable.get(column);
                 if (variableName != null) {
@@ -441,6 +458,8 @@ public class RDF4JTupleExprTranslator {
         });
         substitutionVariables.add(nodeVariable);
         substitutionTerms.add(iriTerm);
+        substitutionVariables.add(startVariable);
+        substitutionTerms.add(termFactory.getIRIFunctionalTerm(template, ImmutableList.of(rawStart)));
         ConstructionNode constructionNode = iqFactory.createConstructionNode(
                 projectedVariables.build(),
                 substitutionFactory.getSubstitution(substitutionVariables.build(), substitutionTerms.build()));
@@ -450,6 +469,7 @@ public class RDF4JTupleExprTranslator {
 
     private void collectTraversalConditions(QueryModelNode node) {
         if (node instanceof Filter) {
+            processSeedCondition(((Filter) node).getCondition());
             processTraversalCondition(((Filter) node).getCondition());
         }
         if (node instanceof BinaryTupleOperator) {
@@ -458,6 +478,43 @@ public class RDF4JTupleExprTranslator {
         } else if (node instanceof UnaryTupleOperator) {
             collectTraversalConditions(((UnaryTupleOperator) node).getArg());
         }
+    }
+
+    private void processSeedCondition(ValueExpr condition) {
+        for (Map.Entry<String, String> entry : pathVariableId.entrySet()) {
+            String seedValue = constantFor(condition, entry.getValue());
+            if (seedValue != null)
+                pathVariableSeed.put(entry.getKey(), seedValue);
+        }
+    }
+
+    private String constantFor(ValueExpr condition, String variableName) {
+        if (condition instanceof Compare) {
+            Compare compare = (Compare) condition;
+            if (compare.getOperator() != Compare.CompareOp.EQ)
+                return null;
+            String value = constantForEquality(compare.getLeftArg(), compare.getRightArg(), variableName);
+            return value != null ? value : constantForEquality(compare.getRightArg(), compare.getLeftArg(), variableName);
+        }
+        if (condition instanceof SameTerm) {
+            SameTerm sameTerm = (SameTerm) condition;
+            String value = constantForEquality(sameTerm.getLeftArg(), sameTerm.getRightArg(), variableName);
+            return value != null ? value : constantForEquality(sameTerm.getRightArg(), sameTerm.getLeftArg(), variableName);
+        }
+        return null;
+    }
+
+    private String constantForEquality(ValueExpr variableSide, ValueExpr constantSide, String variableName) {
+        if (variableSide instanceof Var && ((Var) variableSide).getName().equals(variableName)
+                && constantSide instanceof ValueConstant)
+            return valueKey(((ValueConstant) constantSide).getValue());
+        return null;
+    }
+
+    private String valueKey(Value value) {
+        if (value instanceof org.eclipse.rdf4j.model.Literal)
+            return ((org.eclipse.rdf4j.model.Literal) value).getLabel();
+        return value.stringValue();
     }
 
     private void processTraversalCondition(ValueExpr condition) {
@@ -579,6 +636,16 @@ public class RDF4JTupleExprTranslator {
                         String column = ((PathSpec.Self) terminalSpec).nodeColumns().get(predicate);
                         if (column != null)
                             sinkPropertyVariables.put(predicate, objectName);
+                    }
+                    for (PathSpec candidate : pathTerminalSpecs.values()) {
+                        if (candidate instanceof PathSpec.Self) {
+                            PathSpec.Self selfCandidate = (PathSpec.Self) candidate;
+                            String keyColumn = selfCandidate.nodeColumns().get(predicate);
+                            if (keyColumn != null && keyColumn.equals(selfCandidate.nodeKeyColumn())) {
+                                pathVariableId.put(subjectName, objectName);
+                                break;
+                            }
+                        }
                     }
                 }
             }

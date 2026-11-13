@@ -112,6 +112,27 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void variableStartSeededByBomItemId() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor ?material_code WHERE {\n" +
+                "  ?node a :bom_item ;\n" +
+                "        :parent_bom_item* ?ancestor ;\n" +
+                "        :bom_item_id ?bom_item_id ;\n" +
+                "        path:maxDepth 2 .\n" +
+                "  FILTER(?bom_item_id = 2)\n" +
+                "  ?ancestor :material_code ?material_code .\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("VAR-SQL:\n" + sql);
+
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+        }
+    }
+
+    @Test
     public void pathNodeJoinsAnotherRelation() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +
