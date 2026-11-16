@@ -12,10 +12,10 @@ target		:bom_item/{src_key} :parent_bom_item :bom_item/{dst_key} .
 source		SELECT s.bom_item_id AS src_key, d.bom_item_id AS dst_key FROM parent_bom s INNER JOIN parent_bom d ON s.parent_material_code = d.material_code
 
 mappingId	hasComponent
-target		:bom_item/{bom_item_id} :has_component :material/{material_code} .
-source		SELECT b.bom_item_id AS bom_item_id, m.material_code AS material_code FROM parent_bom b INNER JOIN material m ON b.material_code = m.material_code
+target		:bom_item/{src_key} :has_component :material/{dst_key} .
+source		SELECT s.bom_item_id AS src_key, d.id AS dst_key FROM parent_bom s INNER JOIN material d ON s.material_code = d.material_code
 
 mappingId	materialClass
-target		:material/{material_code} a :material ; :material_code {material_code}^^xsd:string ; :material_name {material_name}^^xsd:string ; :color {color}^^xsd:string ; :category_code {category_code}^^xsd:string ; :safety_stock {safety_stock}^^xsd:string ; :is_critical {is_critical}^^xsd:string ; :procurement_type {procurement_type}^^xsd:string ; :spec_width {spec_width}^^xsd:string ; :spec_length {spec_length}^^xsd:string ; :plant_code {plant_code}^^xsd:string ; :base_unit {base_unit}^^xsd:string ; :spec_thickness {spec_thickness}^^xsd:string ; :density {density}^^xsd:string ; :material_type {material_type}^^xsd:string ; :material_desc {material_desc}^^xsd:string .
-source		select material_code, material_name, color, category_code, safety_stock, is_critical, procurement_type, spec_width, spec_length, plant_code, base_unit, spec_thickness, density, material_type, material_desc from material
+target		:material/{id} a :material ; :material_code {material_code}^^xsd:string ; :material_name {material_name}^^xsd:string ; :color {color}^^xsd:string ; :category_code {category_code}^^xsd:string ; :safety_stock {safety_stock}^^xsd:string ; :is_critical {is_critical}^^xsd:string ; :procurement_type {procurement_type}^^xsd:string ; :spec_width {spec_width}^^xsd:string ; :spec_length {spec_length}^^xsd:string ; :plant_code {plant_code}^^xsd:string ; :base_unit {base_unit}^^xsd:string ; :spec_thickness {spec_thickness}^^xsd:string ; :density {density}^^xsd:string ; :material_type {material_type}^^xsd:string ; :material_desc {material_desc}^^xsd:string .
+source		select id, material_code, material_name, color, category_code, safety_stock, is_critical, procurement_type, spec_width, spec_length, plant_code, base_unit, spec_thickness, density, material_type, material_desc from material
 ]]
