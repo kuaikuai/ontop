@@ -115,7 +115,16 @@ public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
             idx += 9;
         }
         System.out.println("PATH_COL_COUNT=" + pathCols);
+        int leftJoins = 0;
+        idx = 0;
+        while ((idx = sql.indexOf("LEFT OUTER JOIN", idx)) >= 0) {
+            leftJoins++;
+            idx += 15;
+        }
+        System.out.println("LEFT_JOIN_COUNT=" + leftJoins);
         assertFalse("must not be optimised to EMPTY:\n" + sql, sql.contains("EMPTY"));
+        assertTrue("expected the optional groups to be merged (found " + leftJoins + "):\n" + sql,
+                leftJoins <= 6);
         // The path-node optionals live in a different projection scope, so they must be
         // answered by joining the base table back (not silently dropped to NULL).
         assertTrue("expected the path-node attributes to be joined back:\n" + sql,
