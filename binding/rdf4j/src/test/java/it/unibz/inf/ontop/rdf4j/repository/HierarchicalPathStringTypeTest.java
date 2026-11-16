@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.sql.SQLException;
 
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
 
@@ -115,6 +116,10 @@ public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
         }
         System.out.println("PATH_COL_COUNT=" + pathCols);
         assertFalse("must not be optimised to EMPTY:\n" + sql, sql.contains("EMPTY"));
+        // The path-node optionals live in a different projection scope, so they must be
+        // answered by joining the base table back (not silently dropped to NULL).
+        assertTrue("expected the path-node attributes to be joined back:\n" + sql,
+                sql.contains("LEFT OUTER JOIN"));
     }
 
     @Test

@@ -81,6 +81,7 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, String> pathVariableSeed = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
     private final Map<String, Set<String>> sinkPropertyVariables = new HashMap<>();
+    private final Map<String, QueryModelNode> pathTerminalScopes = new HashMap<>();
     private final Map<String, Boolean> pathTraversalEnabled = new HashMap<>();
     private final Map<String, String> traversalSqlConditions = new HashMap<>();
     private final Set<ValueExpr> consumedTraversalConditions =
@@ -575,8 +576,24 @@ public class RDF4JTupleExprTranslator {
                 && pattern.getPredicateVar().getValue().stringValue().startsWith(PATH_NS);
     }
 
-    private boolean isSinkProperty(StatementPattern pattern) {
-        if (!(pattern.getPredicateVar().getValue() instanceof IRI))
+    private static QueryModelNode enclosingProjection(QueryModelNode node) {
+        QueryModelNode current = node;
+        while (current != null) {
+            if (current instanceof Projection)
+                return current;
+            current = current.getParentNode();
+        }
+        return null;
+    }
+
+    private boolean samePathScope(String terminalName, QueryModelNode node) {
+        QueryModelNode pathScope = pathTerminalScopes.get(terminalName);
+        if (pathScope == null)
+            return true;
+        return enclosingProjection(node) == pathScope;
+    }
+
+    private boolean isSinkProperty(StatementPattern pattern) {        if (!(pattern.getPredicateVar().getValue() instanceof IRI))
             return false;
         String predicate = pattern.getPredicateVar().getValue().stringValue();
         Set<String> boundVariables = sinkPropertyVariables.get(predicate);
@@ -604,7 +621,10 @@ public class RDF4JTupleExprTranslator {
             if (support == null)
                 return;
             support.getSpec(sp.getPredicateVar().getValue().stringValue())
-                    .ifPresent(spec -> pathTerminalSpecs.put(objectName, spec));
+                    .ifPresent(spec -> {
+                        pathTerminalSpecs.put(objectName, spec);
+                        pathTerminalScopes.put(objectName, enclosingProjection(path));
+                    });
             return;
         }
         if (node instanceof BinaryTupleOperator) {
@@ -646,7 +666,7 @@ public class RDF4JTupleExprTranslator {
                 String objectName = sp.getObjectVar().getName();
                 if (subjectName != null && objectName != null) {
                     PathSpec terminalSpec = pathTerminalSpecs.get(subjectName);
-                    if (terminalSpec instanceof PathSpec.Self) {
+                    if (terminalSpec instanceof PathSpec.Self && samePathScope(subjectName, node)) {
                         String column = ((PathSpec.Self) terminalSpec).nodeColumns().get(predicate);
                         if (column != null)
                             sinkPropertyVariables.computeIfAbsent(predicate, k -> new HashSet<>()).add(objectName);
