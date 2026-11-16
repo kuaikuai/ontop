@@ -110,60 +110,10 @@ public class RDF4JTupleExprTranslator {
     }
 
     public IQTree getTree(TupleExpr node) throws OntopUnsupportedKGQueryException, OntopInvalidKGQueryException {
-        TupleExpr normalized = mergeConsecutiveOptionals(node);
-        collectPathTerminals(normalized);
-        collectPathMetadata(normalized);
-        collectTraversalConditions(normalized);
-        return translate(normalized).iqTree;
-    }
-
-    /**
-     * Merges a maximal chain of single-triple OPTIONALs that share the same subject into
-     * one OPTIONAL containing a join of those triples. Such properties normally come from
-     * the same mapping row, so the merged form keeps the semantics while allowing the
-     * planner to scan that row once instead of once per property.
-     */
-    private TupleExpr mergeConsecutiveOptionals(TupleExpr node) {
-        if (!(node instanceof LeftJoin))
-            return node;
-        LeftJoin leftJoin = (LeftJoin) node;
-        if (leftJoin.hasCondition())
-            return node;
-
-        List<StatementPattern> patterns = new ArrayList<>();
-        TupleExpr base = leftJoin;
-        while (base instanceof LeftJoin
-                && !((LeftJoin) base).hasCondition()
-                && ((LeftJoin) base).getRightArg() instanceof StatementPattern) {
-            LeftJoin current = (LeftJoin) base;
-            patterns.add(0, (StatementPattern) current.getRightArg());
-            base = current.getLeftArg();
-        }
-
-        TupleExpr result = mergeConsecutiveOptionals(base);
-        String currentSubject = null;
-        List<StatementPattern> group = new ArrayList<>();
-        for (StatementPattern pattern : patterns) {
-            String subject = subjectKey(pattern.getSubjectVar());
-            if (subject == null)
-                subject = "#" + patterns.indexOf(pattern);
-            if (currentSubject != null && !currentSubject.equals(subject)) {
-                result = appendOptional(result, group);
-                group = new ArrayList<>();
-            }
-            currentSubject = subject;
-            group.add(pattern);
-        }
-        if (!group.isEmpty())
-            result = appendOptional(result, group);
-        return result;
-    }
-
-    private TupleExpr appendOptional(TupleExpr left, List<StatementPattern> group) {
-        TupleExpr right = group.get(0);
-        for (int i = 1; i < group.size(); i++)
-            right = new Join(right, group.get(i));
-        return new LeftJoin(left, right);
+        collectPathTerminals(node);
+        collectPathMetadata(node);
+        collectTraversalConditions(node);
+        return translate(node).iqTree;
     }
 
     private TranslationResult translate(TupleExpr node) throws OntopInvalidKGQueryException, OntopUnsupportedKGQueryException {
