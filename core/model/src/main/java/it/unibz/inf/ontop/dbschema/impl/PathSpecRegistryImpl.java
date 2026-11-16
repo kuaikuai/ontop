@@ -5,6 +5,7 @@ import it.unibz.inf.ontop.dbschema.PathSpec;
 import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
 
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -39,6 +40,11 @@ public class PathSpecRegistryImpl implements PathSpecRegistry {
     @Override
     public Optional<PathSpec> get(String predicate) {
         return Optional.ofNullable(snapshot.get().get(predicate));
+    }
+
+    @Override
+    public Set<String> getPredicates() {
+        return snapshot.get().keySet();
     }
 
     @Override

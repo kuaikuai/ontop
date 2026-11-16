@@ -2,6 +2,7 @@ package it.unibz.inf.ontop.rdf4j.repository;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.io.IOException;
@@ -109,6 +110,70 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
         try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
             assertTrue(rs.next());
         }
+    }
+
+    @Test
+    @Ignore("待支持：路径结果节点的常量属性约束（?n1 prop:bom_version \"1\"）")
+    public void resultConstantConstraintWithVariableSeed() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid = \"2\")\n" +
+                "  ?n1 :bom_version \"1\" .\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("RESCONST-SQL:\n" + sql);
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            while (rs.next())
+                System.out.println("ROW: " + rs.getString(1) + " / " + rs.getString(2));
+        }
+    }
+
+    @Test
+    public void sameAttributeOnStartAndPathNode() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0_p0 ?n1_p0 WHERE {\n" +
+                "  ?n0 a :bom_item ; :parent_bom_item* ?n1 ; :bom_item_id ?bid ; path:maxDepth 2 .\n" +
+                "  FILTER(?bid = 2)\n" +
+                "  OPTIONAL { ?n0 :material_code ?n0_p0 . }\n" +
+                "  OPTIONAL { ?n1 :material_code ?n1_p0 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("SAMECOL-SQL:\n" + sql);
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            while (rs.next()) {
+                for (int i = 1; i <= md.getColumnCount(); i++)
+                    System.out.println("COL " + md.getColumnLabel(i) + " = " + rs.getString(i));
+                System.out.println("---");
+            }
+        }
+    }
+
+    @Test
+    @Ignore("待支持：路径起点属性直接绑常量（?n0 prop:bom_item_id \"3517912884\"）")
+    public void constantBoundStartAndResultConstraint() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id \"2\" .\n" +
+                "  ?n1 :bom_version \"1\" .\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("CONST-SQL:\n" + sql);
     }
 
     @Test

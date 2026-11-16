@@ -369,7 +369,8 @@ public class RDF4JTupleExprTranslator {
         String predicateIri = sp.getPredicateVar().getValue().stringValue();
         Optional<PathSpec> specOptional = support.getSpec(predicateIri);
         if (!specOptional.isPresent()) {
-            System.err.println("[PathSpec] no PathSpec registered for " + predicateIri);
+            System.err.println("[PathSpec] no PathSpec registered for " + predicateIri
+                    + " ; registered predicates: " + support.getRegisteredPredicates());
             return null;
         }
         String objectName = path.getObjectVar().getName();

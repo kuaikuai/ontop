@@ -34,6 +34,11 @@ public class PathQuerySupportImpl implements PathQuerySupport {
     }
 
     @Override
+    public java.util.Set<String> getRegisteredPredicates() {
+        return registry.getPredicates();
+    }
+
+    @Override
     public RelationDefinition toRelation(String pathSql, String nodeKeyType, Collection<String> nodeColumns) {
         RelationDefinition.AttributeListBuilder builder = AbstractRelationDefinition.attributeListBuilder();
         QuotedIDFactory ids = dbParameters.getQuotedIDFactory();

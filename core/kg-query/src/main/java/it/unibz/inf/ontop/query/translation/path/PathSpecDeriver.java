@@ -7,6 +7,7 @@ import it.unibz.inf.ontop.dbschema.PathSpecRegistry;
 import it.unibz.inf.ontop.dbschema.RelationDefinition;
 import it.unibz.inf.ontop.iq.IQ;
 import it.unibz.inf.ontop.iq.IQTree;
+import it.unibz.inf.ontop.iq.NaryIQTree;
 import it.unibz.inf.ontop.iq.UnaryIQTree;
 import it.unibz.inf.ontop.iq.impl.NaryIQTreeTools;
 import it.unibz.inf.ontop.iq.node.ConstructionNode;
@@ -22,6 +23,8 @@ import it.unibz.inf.ontop.model.term.functionsymbol.db.IRIStringTemplateFunction
 import it.unibz.inf.ontop.model.template.Template;
 import it.unibz.inf.ontop.spec.mapping.Mapping;
 import org.apache.commons.rdf.api.IRI;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -45,6 +48,8 @@ import static it.unibz.inf.ontop.iq.impl.UnaryIQTreeTools.UnaryIQTreeDecompositi
  */
 public final class PathSpecDeriver {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(PathSpecDeriver.class);
+
     private PathSpecDeriver() {
     }
 
@@ -56,9 +61,16 @@ public final class PathSpecDeriver {
                 String key = iri.getIRIString();
                 if (registry.get(key).isPresent())
                     continue;
-                mapping.getRDFPropertyDefinition(predicate, iri)
-                        .flatMap(iq -> derive(key, iq, tableColumns))
-                        .ifPresent(registry::upsert);
+                Optional<IQ> iq = mapping.getRDFPropertyDefinition(predicate, iri);
+                if (!iq.isPresent()) {
+                    LOGGER.warn("[PathSpec] no mapping IQ found for property {}", key);
+                    continue;
+                }
+                DerivationOutcome outcome = derive(key, iq.get(), tableColumns);
+                if (outcome.getSpec().isPresent())
+                    registry.upsert(outcome.getSpec().get());
+                else
+                    LOGGER.warn("[PathSpec] cannot derive a path spec for {} : {}", key, outcome.getReason());
             }
         }
     }
@@ -135,62 +147,76 @@ public final class PathSpecDeriver {
         return Optional.of(new PropertyColumn(table, column));
     }
 
-    static Optional<PathSpec.Self> derive(String predicateIri, IQ iq,
-                                          Map<String, Map<String, String>> tableColumns) {
+    static DerivationOutcome derive(String predicateIri, IQ iq,
+                                    Map<String, Map<String, String>> tableColumns) {
         DataAtom<AtomPredicate> atom = iq.getProjectionAtom();
         List<? extends VariableOrGroundTerm> args = atom.getArguments();
         if (args.size() < 3)
-            return Optional.empty();
+            return DerivationOutcome.failure("expected 3 arguments, found " + args.size());
         if (!(args.get(0) instanceof Variable) || !(args.get(2) instanceof Variable))
-            return Optional.empty();
+            return DerivationOutcome.failure("subject/object are not variables");
         Variable subjectVariable = (Variable) args.get(0);
         Variable objectVariable = (Variable) args.get(2);
 
         IQTree tree = iq.getTree();
         var constructionDecomposition = UnaryIQTreeDecomposition.of(tree, ConstructionNode.class);
         if (!constructionDecomposition.isPresent())
-            return Optional.empty();
+            return DerivationOutcome.failure("the top-level node is not a ConstructionNode (tree: "
+                    + describeTree(tree) + ")");
         ConstructionNode construction = constructionDecomposition.getNode();
         IQTree child = constructionDecomposition.getChild();
 
         var joinChildren = findJoinChildren(child);
         if (!joinChildren.isPresent())
-            return Optional.empty();
+            return DerivationOutcome.failure("no inner join found below the construction node (tree: "
+                    + describeTree(tree) + ")");
         ImmutableList<IQTree> children = joinChildren.get();
         if (children.size() != 2)
-            return Optional.empty();
+            return DerivationOutcome.failure("expected exactly 2 join children, found " + children.size()
+                    + " (tree: " + describeTree(tree) + ")");
         if (!(children.get(0) instanceof ExtensionalDataNode) || !(children.get(1) instanceof ExtensionalDataNode))
-            return Optional.empty();
+            return DerivationOutcome.failure("the join children are not both extensional nodes (tree: "
+                    + describeTree(tree) + ")");
         ExtensionalDataNode first = (ExtensionalDataNode) children.get(0);
         ExtensionalDataNode second = (ExtensionalDataNode) children.get(1);
         if (!first.getRelationDefinition().equals(second.getRelationDefinition()))
-            return Optional.empty();
+            return DerivationOutcome.failure("the two extensional nodes use different relations: "
+                    + first.getRelationDefinition().getAtomPredicate().getName() + " vs "
+                    + second.getRelationDefinition().getAtomPredicate().getName());
 
         Optional<IriTemplate> subjectTemplate = extractIriTemplate(
                 construction.getSubstitution().apply(subjectVariable));
         Optional<IriTemplate> objectTemplate = extractIriTemplate(
                 construction.getSubstitution().apply(objectVariable));
-        if (!subjectTemplate.isPresent() || !objectTemplate.isPresent())
-            return Optional.empty();
+        if (!subjectTemplate.isPresent())
+            return DerivationOutcome.failure("the subject IRI is not built from a string template");
+        if (!objectTemplate.isPresent())
+            return DerivationOutcome.failure("the object IRI is not built from a string template");
         if (!subjectTemplate.get().prefix.equals(objectTemplate.get().prefix))
-            return Optional.empty();
+            return DerivationOutcome.failure("the subject/object IRI prefixes differ: "
+                    + subjectTemplate.get().prefix + " vs " + objectTemplate.get().prefix);
 
         Optional<AliasColumn> subjectAlias = findAlias(first, second, subjectTemplate.get().columnVariable);
         Optional<AliasColumn> objectAlias = findAlias(first, second, objectTemplate.get().columnVariable);
-        if (!subjectAlias.isPresent() || !objectAlias.isPresent())
-            return Optional.empty();
+        if (!subjectAlias.isPresent())
+            return DerivationOutcome.failure("the subject IRI column was not found in the join children");
+        if (!objectAlias.isPresent())
+            return DerivationOutcome.failure("the object IRI column was not found in the join children");
         if (subjectAlias.get().node == objectAlias.get().node)
-            return Optional.empty();
+            return DerivationOutcome.failure("the subject and object IRIs come from the same join child");
 
         Set<Variable> shared = Sets.intersection(variables(first), variables(second));
         if (shared.size() != 1)
-            return Optional.empty();
+            return DerivationOutcome.failure("expected exactly 1 shared join variable, found " + shared.size()
+                    + " " + shared);
         Variable joinVariable = shared.iterator().next();
 
         Integer childJoinIndex = columnOf(subjectAlias.get().node, joinVariable);
         Integer parentJoinIndex = columnOf(objectAlias.get().node, joinVariable);
-        if (childJoinIndex == null || parentJoinIndex == null)
-            return Optional.empty();
+        if (childJoinIndex == null)
+            return DerivationOutcome.failure("the join column was not found on the subject side");
+        if (parentJoinIndex == null)
+            return DerivationOutcome.failure("the join column was not found on the object side");
 
         RelationDefinition relation = first.getRelationDefinition();
         String nodeKeyColumn = relation.getAttribute(subjectAlias.get().columnIndex + 1).getID().getSQLRendering();
@@ -200,7 +226,7 @@ public final class PathSpecDeriver {
         String table = relation.getAtomPredicate().getName();
         Map<String, String> nodeColumns = tableColumns.getOrDefault(table, Collections.emptyMap());
 
-        return Optional.of(new PathSpec.Self(
+        return DerivationOutcome.success(new PathSpec.Self(
                 predicateIri,
                 table,
                 joinKeyColumn,
@@ -210,6 +236,33 @@ public final class PathSpecDeriver {
                 subjectTemplate.get().prefix,
                 nodeColumns,
                 Optional.empty()));
+    }
+
+    private static String describeTree(IQTree tree) {
+        StringBuilder sb = new StringBuilder();
+        IQTree current = tree;
+        for (int depth = 0; depth < 8 && current != null; depth++) {
+            if (depth > 0)
+                sb.append(" -> ");
+            sb.append(current.getClass().getSimpleName());
+            if (current instanceof UnaryIQTree) {
+                current = ((UnaryIQTree) current).getChild();
+            } else if (current instanceof NaryIQTree) {
+                NaryIQTree nary = (NaryIQTree) current;
+                sb.append('(');
+                List<? extends IQTree> children = nary.getChildren();
+                for (int i = 0; i < children.size(); i++) {
+                    if (i > 0)
+                        sb.append(", ");
+                    sb.append(children.get(i).getClass().getSimpleName());
+                }
+                sb.append(')');
+                current = null;
+            } else {
+                current = null;
+            }
+        }
+        return sb.toString();
     }
 
     private static Optional<ImmutableList<IQTree>> findJoinChildren(IQTree tree) {
@@ -292,6 +345,32 @@ public final class PathSpecDeriver {
                 .filter(Variable.class::isInstance)
                 .map(Variable.class::cast)
                 .collect(Collectors.toSet());
+    }
+
+    static final class DerivationOutcome {
+        private final PathSpec.Self spec;
+        private final String reason;
+
+        private DerivationOutcome(PathSpec.Self spec, String reason) {
+            this.spec = spec;
+            this.reason = reason;
+        }
+
+        static DerivationOutcome success(PathSpec.Self spec) {
+            return new DerivationOutcome(spec, null);
+        }
+
+        static DerivationOutcome failure(String reason) {
+            return new DerivationOutcome(null, reason);
+        }
+
+        Optional<PathSpec.Self> getSpec() {
+            return Optional.ofNullable(spec);
+        }
+
+        String getReason() {
+            return reason;
+        }
     }
 
     private static final class IriTemplate {
