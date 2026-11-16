@@ -25,6 +25,37 @@ public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void mergedOptionalOnPathNode() throws SQLException {
+        String q = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT DISTINCT ?n0 ?n1 ?n2 ?n1_p1 ?n1_p5 ?n2_p1 WHERE {\n" +
+                "?n0 a :bom_item .\n?n1 a :bom_item .\n?n2 a :material .\n" +
+                "?n0 :parent_bom_item+ ?n1 .\n?n0 path:maxDepth 2 .\n" +
+                "?n1 :has_component ?n2 .\n" +
+                "?n0 :bom_item_id ?v0_0 . FILTER(?v0_0 = \"2\")\n" +
+                "?n1 :bom_version ?v1_1 . FILTER(?v1_1 = \"1\")\n" +
+                "OPTIONAL {\n" +
+                "  ?n1 :material_code ?n1_p0 ;\n" +
+                "      :bom_item_id ?n1_p1 ;\n" +
+                "      :bom_code ?n1_p2 ;\n" +
+                "      :bom_version ?n1_p5 .\n" +
+                "}\n" +
+                "OPTIONAL { ?n2 :color ?n2_p1 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(q);
+        System.out.println("MERGED-OPT-SQL:\n" + sql);
+        int count = 0;
+        int idx = 0;
+        while ((idx = sql.indexOf("path_col_", idx)) >= 0) {
+            count++;
+            idx += 9;
+        }
+        System.out.println("MERGED_PATH_COL_COUNT=" + count);
+        assertFalse("must not be EMPTY:\n" + sql, sql.contains("EMPTY"));
+    }
+
+    @Test
     public void fullQueryWithConstantStartOptionals() throws SQLException {
         String q = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +
