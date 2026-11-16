@@ -80,7 +80,7 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, Set<String>> pathVariableId = new HashMap<>();
     private final Map<String, String> pathVariableSeed = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
-    private final Map<String, String> sinkPropertyVariables = new HashMap<>();
+    private final Map<String, Set<String>> sinkPropertyVariables = new HashMap<>();
     private final Map<String, Boolean> pathTraversalEnabled = new HashMap<>();
     private final Map<String, String> traversalSqlConditions = new HashMap<>();
     private final Set<ValueExpr> consumedTraversalConditions =
@@ -421,25 +421,28 @@ public class RDF4JTupleExprTranslator {
         projectedVariables.add(startVariable);
         Map<Variable, ImmutableTerm> attributeSubstitutions = new HashMap<>();
         if (spec instanceof PathSpec.Self) {
-            Map<String, String> columnToVariable = new HashMap<>();
+            Map<String, Set<String>> columnToVariables = new HashMap<>();
             for (Map.Entry<String, String> e : ((PathSpec.Self) spec).nodeColumns().entrySet()) {
-                String variableName = sinkPropertyVariables.get(e.getKey());
-                if (variableName != null)
-                    columnToVariable.putIfAbsent(e.getValue(), variableName);
+                Set<String> variableNames = sinkPropertyVariables.get(e.getKey());
+                if (variableNames != null)
+                    columnToVariables.computeIfAbsent(e.getValue(), k -> new LinkedHashSet<>())
+                            .addAll(variableNames);
             }
-            // PathRelationDefinition columns: 0 = node_iri, 1 = depth, 2 = predecessor.
-            // Sunk node attributes therefore start at index 3 (must stay in sync with
-            // PathQuerySupportImpl.toRelation, which appends them after these three columns).
+            // PathRelationDefinition columns: 0 = node_iri, 1 = depth, 2 = predecessor, 3 = start_iri.
+            // Sunk node attributes therefore start at index 4 (must stay in sync with
+            // PathQuerySupportImpl.toRelation, which appends them after these columns).
             int index = 4;
             for (String column : nodeColumns) {
-                String variableName = columnToVariable.get(column);
-                if (variableName != null) {
-                    Variable rawAttribute = termFactory.getVariable(variableName + "_raw");
+                Set<String> variableNames = columnToVariables.get(column);
+                if (variableNames != null && !variableNames.isEmpty()) {
+                    Variable rawAttribute = termFactory.getVariable("path_col_" + index + "_raw");
                     argumentMap.put(index, rawAttribute);
-                    Variable attributeVariable = termFactory.getVariable(variableName);
-                    projectedVariables.add(attributeVariable);
-                    attributeSubstitutions.put(attributeVariable,
-                            termFactory.getRDFLiteralFunctionalTerm(rawAttribute, typeFactory.getXsdStringDatatype()));
+                    for (String variableName : variableNames) {
+                        Variable attributeVariable = termFactory.getVariable(variableName);
+                        projectedVariables.add(attributeVariable);
+                        attributeSubstitutions.put(attributeVariable,
+                                termFactory.getRDFLiteralFunctionalTerm(rawAttribute, typeFactory.getXsdStringDatatype()));
+                    }
                 }
                 index++;
             }
@@ -532,9 +535,11 @@ public class RDF4JTupleExprTranslator {
             PathSpec.Self self = (PathSpec.Self) entry.getValue();
             Map<String, String> variableToSql = new HashMap<>();
             for (Map.Entry<String, String> e : self.nodeColumns().entrySet()) {
-                String variableName = sinkPropertyVariables.get(e.getKey());
-                if (variableName != null)
-                    variableToSql.put(variableName, "p." + e.getValue());
+                Set<String> variableNames = sinkPropertyVariables.get(e.getKey());
+                if (variableNames != null) {
+                    for (String variableName : variableNames)
+                        variableToSql.put(variableName, "p." + e.getValue());
+                }
             }
             if (variableToSql.isEmpty())
                 continue;
@@ -574,16 +579,14 @@ public class RDF4JTupleExprTranslator {
         if (!(pattern.getPredicateVar().getValue() instanceof IRI))
             return false;
         String predicate = pattern.getPredicateVar().getValue().stringValue();
-        String boundVariable = sinkPropertyVariables.get(predicate);
-        if (boundVariable == null)
+        Set<String> boundVariables = sinkPropertyVariables.get(predicate);
+        if (boundVariables == null)
             return false;
         String subjectName = pattern.getSubjectVar().getName();
         if (subjectName == null || !pathTerminalSpecs.containsKey(subjectName))
             return false;
-        // Only the exact pattern that was chosen as the sink is swallowed: any other
-        // pattern with the same predicate (e.g. an OPTIONAL on the same property) must be
-        // translated normally, otherwise its variable would stay unbound.
-        return boundVariable.equals(pattern.getObjectVar().getName());
+        String objectName = pattern.getObjectVar().getName();
+        return objectName != null && boundVariables.contains(objectName);
     }
 
     private void collectPathTerminals(QueryModelNode node) {
@@ -646,7 +649,7 @@ public class RDF4JTupleExprTranslator {
                     if (terminalSpec instanceof PathSpec.Self) {
                         String column = ((PathSpec.Self) terminalSpec).nodeColumns().get(predicate);
                         if (column != null)
-                            sinkPropertyVariables.putIfAbsent(predicate, objectName);
+                            sinkPropertyVariables.computeIfAbsent(predicate, k -> new HashSet<>()).add(objectName);
                     }
                     for (PathSpec candidate : pathTerminalSpecs.values()) {
                         if (candidate instanceof PathSpec.Self) {
