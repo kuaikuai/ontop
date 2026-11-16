@@ -77,7 +77,7 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, Integer> pathMinDepth = new HashMap<>();
     private final Map<String, String> pathDepthVariable = new HashMap<>();
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
-    private final Map<String, String> pathVariableId = new HashMap<>();
+    private final Map<String, Set<String>> pathVariableId = new HashMap<>();
     private final Map<String, String> pathVariableSeed = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
     private final Map<String, String> sinkPropertyVariables = new HashMap<>();
@@ -482,10 +482,14 @@ public class RDF4JTupleExprTranslator {
     }
 
     private void processSeedCondition(ValueExpr condition) {
-        for (Map.Entry<String, String> entry : pathVariableId.entrySet()) {
-            String seedValue = constantFor(condition, entry.getValue());
-            if (seedValue != null)
-                pathVariableSeed.put(entry.getKey(), seedValue);
+        for (Map.Entry<String, Set<String>> entry : pathVariableId.entrySet()) {
+            for (String idVariable : entry.getValue()) {
+                String seedValue = constantFor(condition, idVariable);
+                if (seedValue != null) {
+                    pathVariableSeed.put(entry.getKey(), seedValue);
+                    break;
+                }
+            }
         }
     }
 
@@ -643,7 +647,7 @@ public class RDF4JTupleExprTranslator {
                             PathSpec.Self selfCandidate = (PathSpec.Self) candidate;
                             String keyColumn = selfCandidate.nodeColumns().get(predicate);
                             if (keyColumn != null && keyColumn.equals(selfCandidate.nodeKeyColumn())) {
-                                pathVariableId.put(subjectName, objectName);
+                                pathVariableId.computeIfAbsent(subjectName, k -> new HashSet<>()).add(objectName);
                                 break;
                             }
                         }

@@ -136,6 +136,27 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void outerOptionalOnSameKeyPropertyKeepsSeed() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 ?n0_p1 WHERE {\n" +
+                "  { SELECT ?n0 ?n1 WHERE {\n" +
+                "      ?n0 a :bom_item ;\n" +
+                "          :parent_bom_item+ ?n1 ;\n" +
+                "          :bom_item_id ?bid ;\n" +
+                "          path:maxDepth 2 .\n" +
+                "      FILTER(?bid = 2)\n" +
+                "    } LIMIT 200 }\n" +
+                "  OPTIONAL { ?n0 :bom_item_id ?n0_p1 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("OUTER-OPT-SQL:\n" + sql);
+        assertTrue("expected the start seed to be kept:\n" + sql,
+                sql.contains("= 2"));
+    }
+
+    @Test
     public void sameAttributeOnStartAndPathNode() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +
