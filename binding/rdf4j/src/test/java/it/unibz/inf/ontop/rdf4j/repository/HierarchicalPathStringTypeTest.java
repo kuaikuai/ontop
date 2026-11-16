@@ -76,6 +76,13 @@ public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
 
         String sql = reformulateIntoNativeQuery(q);
         System.out.println("FULL-SQL:\n" + sql);
+        int pathCols = 0;
+        int idx = 0;
+        while ((idx = sql.indexOf("path_col_", idx)) >= 0) {
+            pathCols++;
+            idx += 9;
+        }
+        System.out.println("PATH_COL_COUNT=" + pathCols);
         assertFalse("must not be optimised to EMPTY:\n" + sql, sql.contains("EMPTY"));
     }
 
