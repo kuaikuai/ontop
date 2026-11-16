@@ -136,6 +136,25 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void optionalOnPathNodeAttributesDoesNotEmpty() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 ?n0_p1 ?n1_p5 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?v0 . FILTER(?v0 = 2)\n" +
+                "  OPTIONAL { ?n0 :bom_item_id ?n0_p1 . }\n" +
+                "  OPTIONAL { ?n1 :bom_version ?n1_p5 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("OPT-ATTR-SQL:\n" + sql);
+        assertTrue("must not be optimised to EMPTY:\n" + sql, !sql.contains("EMPTY"));
+    }
+
+    @Test
     public void outerOptionalOnSameKeyPropertyKeepsSeed() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +

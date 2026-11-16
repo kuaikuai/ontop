@@ -574,10 +574,16 @@ public class RDF4JTupleExprTranslator {
         if (!(pattern.getPredicateVar().getValue() instanceof IRI))
             return false;
         String predicate = pattern.getPredicateVar().getValue().stringValue();
-        if (!sinkPropertyVariables.containsKey(predicate))
+        String boundVariable = sinkPropertyVariables.get(predicate);
+        if (boundVariable == null)
             return false;
         String subjectName = pattern.getSubjectVar().getName();
-        return subjectName != null && pathTerminalSpecs.containsKey(subjectName);
+        if (subjectName == null || !pathTerminalSpecs.containsKey(subjectName))
+            return false;
+        // Only the exact pattern that was chosen as the sink is swallowed: any other
+        // pattern with the same predicate (e.g. an OPTIONAL on the same property) must be
+        // translated normally, otherwise its variable would stay unbound.
+        return boundVariable.equals(pattern.getObjectVar().getName());
     }
 
     private void collectPathTerminals(QueryModelNode node) {
@@ -640,7 +646,7 @@ public class RDF4JTupleExprTranslator {
                     if (terminalSpec instanceof PathSpec.Self) {
                         String column = ((PathSpec.Self) terminalSpec).nodeColumns().get(predicate);
                         if (column != null)
-                            sinkPropertyVariables.put(predicate, objectName);
+                            sinkPropertyVariables.putIfAbsent(predicate, objectName);
                     }
                     for (PathSpec candidate : pathTerminalSpecs.values()) {
                         if (candidate instanceof PathSpec.Self) {
