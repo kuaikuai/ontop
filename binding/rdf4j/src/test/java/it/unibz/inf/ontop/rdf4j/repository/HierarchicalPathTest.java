@@ -73,6 +73,24 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void traversalFilterSupportsContains() throws SQLException {
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor ?code WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "  ?ancestor path:traversalFilter true .\n" +
+                "  ?ancestor :material_code ?code .\n" +
+                "  FILTER(CONTAINS(?code, \"M\"))\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("CONTAINS-SQL:\n" + sql);
+        assertTrue("expected per-level LIKE pruning:\n" + sql,
+                sql.toUpperCase().contains("LIKE '%M%'"));
+    }
+
+    @Test
     public void traversalFilterPrunesEveryLevel() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +
