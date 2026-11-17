@@ -94,7 +94,7 @@ public final class PathSpecDeriver {
                         .map(PathSpecDeriver::derivePropertyColumns)
                         .orElse(Collections.emptyList());
                 for (PropertyColumn propertyColumn : propertyColumns) {
-                    if (langLiteralProperties.contains(propertyKey(propertyColumn.table, propertyIri)))
+                    if (langLiteralProperties.contains(PathSpec.propertyKey(propertyColumn.table, propertyIri)))
                         continue; // language-tagged: must not be sunk
                     tableColumns.computeIfAbsent(propertyColumn.table, k -> new HashMap<>())
                             .put(propertyIri, propertyColumn.column);
@@ -102,11 +102,6 @@ public final class PathSpecDeriver {
             }
         }
         return tableColumns;
-    }
-
-    /** (table, property IRI) key, shared format with DefaultMappingTransformer. */
-    private static String propertyKey(String table, String propertyIri) {
-        return table + "\u0000" + propertyIri;
     }
 
     private static List<PropertyColumn> derivePropertyColumns(IQ iq) {
@@ -247,7 +242,7 @@ public final class PathSpecDeriver {
 
         Map<String, String> nodeColumnTypes = new HashMap<>();
         for (String propertyIri : nodeColumns.keySet()) {
-            String datatype = propertyDatatypes.get(propertyKey(table, propertyIri));
+            String datatype = propertyDatatypes.get(PathSpec.propertyKey(table, propertyIri));
             nodeColumnTypes.put(propertyIri,
                     datatype != null ? datatype : XSD.STRING.getIRIString());
         }

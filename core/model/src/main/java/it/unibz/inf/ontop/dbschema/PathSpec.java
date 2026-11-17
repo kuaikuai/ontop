@@ -10,6 +10,15 @@ public interface PathSpec {
 
     Optional<TraversalFilter> traversalFilter();
 
+    /**
+     * Canonical (table, property IRI) key shared by DefaultMappingTransformer
+     * (mapping/core) and PathSpecDeriver (core/kg-query), which cannot share code
+     * directly because of the module dependency direction.
+     */
+    static String propertyKey(String table, String propertyIri) {
+        return table + "\u0000" + propertyIri;
+    }
+
     final class Self implements PathSpec {
         private final String predicate;
         private final String table;
@@ -34,8 +43,10 @@ public interface PathSpec {
             this.nodeKeyColumn = nodeKeyColumn;
             this.nodeKeyType = nodeKeyType;
             this.iriPrefix = iriPrefix;
-            this.nodeColumns = nodeColumns;
-            this.nodeColumnTypes = nodeColumnTypes;
+            // Defensive copies: Self instances live in the shared PathSpecRegistry and
+            // are read by concurrent query threads — make effective immutability structural
+            this.nodeColumns = Map.copyOf(nodeColumns);
+            this.nodeColumnTypes = Map.copyOf(nodeColumnTypes);
             this.traversalFilter = traversalFilter;
         }
 

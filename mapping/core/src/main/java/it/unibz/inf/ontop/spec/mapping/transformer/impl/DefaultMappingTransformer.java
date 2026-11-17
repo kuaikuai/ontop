@@ -3,6 +3,7 @@ package it.unibz.inf.ontop.spec.mapping.transformer.impl;
 import com.google.common.collect.*;
 import com.google.inject.Inject;
 import it.unibz.inf.ontop.dbschema.DBParameters;
+import it.unibz.inf.ontop.dbschema.PathSpec;
 import it.unibz.inf.ontop.injection.IntermediateQueryFactory;
 import it.unibz.inf.ontop.injection.OntopMappingSettings;
 import it.unibz.inf.ontop.injection.SpecificationFactory;
@@ -176,12 +177,15 @@ public class DefaultMappingTransformer implements MappingTransformer {
                     continue;
                 Optional<String> table = extractTable(definition, assertion);
                 if (!table.isPresent()) {
-                    LOGGER.warn("[PropertyDatatypes] Cannot determine the table of property {}; skipping it",
+                    /* Benign fallback (same behaviour as before this feature): such a property
+                     * is simply sunk as xsd:string; debug to avoid noise on large mappings */
+                    LOGGER.debug("[PropertyDatatypes] property {} has no unique source table; " +
+                                    "it will fall back to xsd:string when sunk into a path CTE",
                             propertyIRI);
                     continue;
                 }
 
-                String key = propertyKey(table.get(), propertyIRI.getIRIString());
+                String key = PathSpec.propertyKey(table.get(), propertyIRI.getIRIString());
                 if (datatype.get().getLanguageTag().isPresent()) {
                     // Language-tagged literal: must not be sunk (keeps its tag through the join-back)
                     langProperties.add(key);
@@ -276,11 +280,6 @@ public class DefaultMappingTransformer implements MappingTransformer {
             for (IQTree child : ((NaryIQTree) tree).getChildren())
                 collectTableNames(child, lexicalVariable, tables);
         }
-    }
-
-    /** (table, property IRI) key, shared format with PathSpecDeriver. */
-    private static String propertyKey(String table, String propertyIri) {
-        return table + "\u0000" + propertyIri;
     }
 
     private static final class PropertyDatatypeExtraction {
