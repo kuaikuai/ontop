@@ -1,0 +1,12 @@
+create table parent_bom (
+    bom_item_id integer primary key,
+    material_code varchar(20) not null,
+    parent_material_code varchar(20),
+    bom_version integer,
+    note varchar(50)
+);
+
+insert into parent_bom (bom_item_id, material_code, parent_material_code, bom_version, note) values
+(1, 'M1', 'M0', 1, 'root part'),
+(2, 'M2', 'M1', 2, 'intermediate part'),
+(3, 'M3', 'M1', 1, 'leaf part');

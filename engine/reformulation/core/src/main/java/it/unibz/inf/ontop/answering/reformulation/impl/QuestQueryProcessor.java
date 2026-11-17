@@ -83,7 +83,8 @@ public class QuestQueryProcessor implements QueryReformulator {
 		this.queryCache = queryCache;
 		this.pathQuerySupport = new PathQuerySupportImpl(
 				obdaSpecification.getDBParameters(), pathSpecRegistry);
-		PathSpecDeriver.deriveAndRegister(obdaSpecification.getSaturatedMapping(), pathSpecRegistry);
+		PathSpecDeriver.deriveAndRegister(obdaSpecification.getSaturatedMapping(), pathSpecRegistry,
+		        obdaSpecification.getPropertyDatatypes(), obdaSpecification.getLangLiteralProperties());
 		PathSpecConfigLoader.loadIfConfigured(pathSpecRegistry);
 	}
 

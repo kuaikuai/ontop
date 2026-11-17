@@ -1,5 +1,6 @@
 package it.unibz.inf.ontop.dbschema;
 
+import java.util.Collections;
 import java.util.Map;
 import java.util.Optional;
 
@@ -18,11 +19,13 @@ public interface PathSpec {
         private final String nodeKeyType;
         private final String iriPrefix;
         private final Map<String, String> nodeColumns;
+        private final Map<String, String> nodeColumnTypes;
         private final Optional<TraversalFilter> traversalFilter;
 
         public Self(String predicate, String table, String joinKeyColumn,
                     String parentJoinKeyColumn, String nodeKeyColumn, String nodeKeyType,
                     String iriPrefix, Map<String, String> nodeColumns,
+                    Map<String, String> nodeColumnTypes,
                     Optional<TraversalFilter> traversalFilter) {
             this.predicate = predicate;
             this.table = table;
@@ -32,7 +35,20 @@ public interface PathSpec {
             this.nodeKeyType = nodeKeyType;
             this.iriPrefix = iriPrefix;
             this.nodeColumns = nodeColumns;
+            this.nodeColumnTypes = nodeColumnTypes;
             this.traversalFilter = traversalFilter;
+        }
+
+        /**
+         * Legacy constructor (no datatype information): kept for PathSpecConfigLoader,
+         * where properties get the default xsd:string typing.
+         */
+        public Self(String predicate, String table, String joinKeyColumn,
+                    String parentJoinKeyColumn, String nodeKeyColumn, String nodeKeyType,
+                    String iriPrefix, Map<String, String> nodeColumns,
+                    Optional<TraversalFilter> traversalFilter) {
+            this(predicate, table, joinKeyColumn, parentJoinKeyColumn, nodeKeyColumn, nodeKeyType,
+                    iriPrefix, nodeColumns, Collections.emptyMap(), traversalFilter);
         }
 
         @Override
@@ -71,6 +87,11 @@ public interface PathSpec {
 
         public Map<String, String> nodeColumns() {
             return nodeColumns;
+        }
+
+        /** property IRI -> declared RDF datatype IRI (xsd:string when unknown). */
+        public Map<String, String> nodeColumnTypes() {
+            return nodeColumnTypes;
         }
     }
 

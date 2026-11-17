@@ -425,30 +425,38 @@ public class RDF4JTupleExprTranslator {
         projectedVariables.add(startVariable);
         Map<Variable, ImmutableTerm> attributeSubstitutions = new HashMap<>();
         if (spec instanceof PathSpec.Self) {
-            Map<String, Set<String>> columnToVariables = new HashMap<>();
-            for (Map.Entry<String, String> e : ((PathSpec.Self) spec).nodeColumns().entrySet()) {
-                Set<String> variableNames = sinkPropertyVariables.get(e.getKey());
-                if (variableNames != null)
-                    columnToVariables.computeIfAbsent(e.getValue(), k -> new LinkedHashSet<>())
-                            .addAll(variableNames);
+            PathSpec.Self selfSpec = (PathSpec.Self) spec;
+            // Column -> (property IRI -> SPARQL variables). Datatypes are resolved per property,
+            // so that properties sharing a column but declaring different datatypes each keep
+            // their own (the substitution entries are independent).
+            Map<String, Map<String, Set<String>>> columnToPropertyVariables = new HashMap<>();
+            for (Map.Entry<String, String> e : selfSpec.nodeColumns().entrySet()) {
+                String propertyIri = e.getKey();
+                Set<String> variableNames = sinkPropertyVariables.get(propertyIri);
+                if (variableNames != null && !variableNames.isEmpty())
+                    columnToPropertyVariables.computeIfAbsent(e.getValue(), k -> new LinkedHashMap<>())
+                            .put(propertyIri, variableNames);
             }
             // PathRelationDefinition columns: 0 = node_iri, 1 = depth, 2 = predecessor, 3 = start_iri.
             // Sunk node attributes therefore start at index 4 (must stay in sync with
             // PathQuerySupportImpl.toRelation, which appends them after these columns).
             int index = 4;
             for (String column : nodeColumns) {
-                Set<String> variableNames = columnToVariables.get(column);
-                if (variableNames != null && !variableNames.isEmpty()) {
+                Map<String, Set<String>> propertyVariables = columnToPropertyVariables.get(column);
+                if (propertyVariables != null && !propertyVariables.isEmpty()) {
                     Variable rawAttribute = termFactory.getVariable("path_col_" + index + "_raw");
                     argumentMap.put(index, rawAttribute);
-                    for (String variableName : variableNames) {
-                        Variable attributeVariable = termFactory.getVariable(variableName);
-                        projectedVariables.add(attributeVariable);
-                        attributeSubstitutions.put(attributeVariable,
-                                termFactory.getRDFLiteralFunctionalTerm(rawAttribute, typeFactory.getXsdStringDatatype()));
+                    for (Map.Entry<String, Set<String>> propertyVariableEntry : propertyVariables.entrySet()) {
+                        RDFDatatype datatype = datatypeFor(selfSpec.nodeColumnTypes().get(propertyVariableEntry.getKey()));
+                        for (String variableName : propertyVariableEntry.getValue()) {
+                            Variable attributeVariable = termFactory.getVariable(variableName);
+                            projectedVariables.add(attributeVariable);
+                            attributeSubstitutions.put(attributeVariable,
+                                    termFactory.getRDFLiteralFunctionalTerm(rawAttribute, datatype));
+                        }
                     }
                 }
-                index++;
+                index++; // columns without sink variables must still advance the index
             }
         }
         ExtensionalDataNode dataNode = iqFactory.createExtensionalDataNode(relation, argumentMap.build());
@@ -473,6 +481,19 @@ public class RDF4JTupleExprTranslator {
                 substitutionFactory.getSubstitution(substitutionVariables.build(), substitutionTerms.build()));
         IQTree pathTree = iqFactory.createUnaryIQTree(constructionNode, dataNode);
         return createTranslationResult(pathTree, ImmutableSet.of());
+    }
+
+    /**
+     * Resolves the declared RDF datatype of a sunk property.
+     * The default xsd:string is only defensive: PathSpecDeriver fills every entry of
+     * nodeColumnTypes (unknown datatypes default to xsd:string there). Unknown datatype IRIs
+     * are preserved by TypeFactory (a concrete datatype is synthesized), which keeps the
+     * CONSTRUCT output consistent with the mapping declaration.
+     */
+    private RDFDatatype datatypeFor(String datatypeIri) {
+        if (datatypeIri == null)
+            return typeFactory.getXsdStringDatatype();
+        return typeFactory.getDatatype(rdfFactory.createIRI(datatypeIri));
     }
 
     private void collectTraversalConditions(QueryModelNode node) {

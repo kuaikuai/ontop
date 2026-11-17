@@ -74,6 +74,34 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void sunkIntegerAttributeSupportsNumericFilter() throws SQLException {
+        // bom_version is declared ^^xsd:integer in the mapping: the sunk attribute must
+        // keep that datatype so that a numeric FILTER matches. When everything was sunk
+        // as xsd:string this query was optimised to EMPTY (string vs integer type error).
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor ?bv WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "  ?ancestor :bom_version ?bv .\n" +
+                "  FILTER(?bv = 1)\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("INT-FILTER-SQL:\n" + sql);
+        assertTrue("expected bom_version to be carried by the path CTE:\n" + sql,
+                sql.toLowerCase().contains("bom_version"));
+        assertFalse("must not be optimised to EMPTY:\n" + sql, sql.contains("EMPTY"));
+
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue("expected the parent with bom_version = 1", rs.next());
+            assertEquals("1", rs.getString(1));
+            assertEquals("1", rs.getString(2));
+            assertFalse("expected a single ancestor", rs.next());
+        }
+    }
+
+    @Test
     public void perLevelLimitIsAppliedOnlyWhenRequested() throws SQLException {
         String withLimit = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +

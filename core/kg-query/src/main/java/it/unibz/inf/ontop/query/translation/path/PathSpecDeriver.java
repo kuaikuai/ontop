@@ -21,6 +21,7 @@ import it.unibz.inf.ontop.model.term.Variable;
 import it.unibz.inf.ontop.model.term.VariableOrGroundTerm;
 import it.unibz.inf.ontop.model.term.functionsymbol.db.IRIStringTemplateFunctionSymbol;
 import it.unibz.inf.ontop.model.template.Template;
+import it.unibz.inf.ontop.model.vocabulary.XSD;
 import it.unibz.inf.ontop.spec.mapping.Mapping;
 import org.apache.commons.rdf.api.IRI;
 import org.slf4j.Logger;
@@ -53,8 +54,16 @@ public final class PathSpecDeriver {
     private PathSpecDeriver() {
     }
 
-    public static void deriveAndRegister(Mapping mapping, PathSpecRegistry registry) {
-        Map<String, Map<String, String>> tableColumns = collectTableColumns(mapping);
+    /**
+     * @param propertyDatatypes (table, property IRI) -> declared RDF datatype IRI
+     *                         (see DefaultMappingTransformer#extractPropertyDatatypes)
+     * @param langLiteralProperties (table, property IRI) whose values carry a language tag:
+     *                               such properties are excluded from nodeColumns, i.e. they are
+     *                               never sunk (they keep their language tag through the join-back)
+     */
+    public static void deriveAndRegister(Mapping mapping, PathSpecRegistry registry,
+                                          Map<String, String> propertyDatatypes, Set<String> langLiteralProperties) {
+        Map<String, Map<String, String>> tableColumns = collectTableColumns(mapping, langLiteralProperties);
 
         for (RDFAtomPredicate predicate : mapping.getRDFAtomPredicates()) {
             for (IRI iri : mapping.getRDFProperties(predicate)) {
@@ -66,7 +75,7 @@ public final class PathSpecDeriver {
                     LOGGER.warn("[PathSpec] no mapping IQ found for property {}", key);
                     continue;
                 }
-                DerivationOutcome outcome = derive(key, iq.get(), tableColumns);
+                DerivationOutcome outcome = derive(key, iq.get(), tableColumns, propertyDatatypes);
                 if (outcome.getSpec().isPresent())
                     registry.upsert(outcome.getSpec().get());
                 else
@@ -75,20 +84,29 @@ public final class PathSpecDeriver {
         }
     }
 
-    private static Map<String, Map<String, String>> collectTableColumns(Mapping mapping) {
+    private static Map<String, Map<String, String>> collectTableColumns(Mapping mapping,
+                                                                         Set<String> langLiteralProperties) {
         Map<String, Map<String, String>> tableColumns = new HashMap<>();
         for (RDFAtomPredicate predicate : mapping.getRDFAtomPredicates()) {
             for (IRI iri : mapping.getRDFProperties(predicate)) {
+                String propertyIri = iri.getIRIString();
                 List<PropertyColumn> propertyColumns = mapping.getRDFPropertyDefinition(predicate, iri)
                         .map(PathSpecDeriver::derivePropertyColumns)
                         .orElse(Collections.emptyList());
                 for (PropertyColumn propertyColumn : propertyColumns) {
+                    if (langLiteralProperties.contains(propertyKey(propertyColumn.table, propertyIri)))
+                        continue; // language-tagged: must not be sunk
                     tableColumns.computeIfAbsent(propertyColumn.table, k -> new HashMap<>())
-                            .put(iri.getIRIString(), propertyColumn.column);
+                            .put(propertyIri, propertyColumn.column);
                 }
             }
         }
         return tableColumns;
+    }
+
+    /** (table, property IRI) key, shared format with DefaultMappingTransformer. */
+    private static String propertyKey(String table, String propertyIri) {
+        return table + "\u0000" + propertyIri;
     }
 
     private static List<PropertyColumn> derivePropertyColumns(IQ iq) {
@@ -148,7 +166,8 @@ public final class PathSpecDeriver {
     }
 
     static DerivationOutcome derive(String predicateIri, IQ iq,
-                                    Map<String, Map<String, String>> tableColumns) {
+                                    Map<String, Map<String, String>> tableColumns,
+                                    Map<String, String> propertyDatatypes) {
         DataAtom<AtomPredicate> atom = iq.getProjectionAtom();
         List<? extends VariableOrGroundTerm> args = atom.getArguments();
         if (args.size() < 3)
@@ -226,6 +245,14 @@ public final class PathSpecDeriver {
         String table = relation.getAtomPredicate().getName();
         Map<String, String> nodeColumns = tableColumns.getOrDefault(table, Collections.emptyMap());
 
+        Map<String, String> nodeColumnTypes = new HashMap<>();
+        for (String propertyIri : nodeColumns.keySet()) {
+            String datatype = propertyDatatypes.get(propertyKey(table, propertyIri));
+            nodeColumnTypes.put(propertyIri,
+                    datatype != null ? datatype : XSD.STRING.getIRIString());
+        }
+        LOGGER.debug("[PathSpec] table {} nodeColumns={} nodeColumnTypes={}", table, nodeColumns, nodeColumnTypes);
+
         return DerivationOutcome.success(new PathSpec.Self(
                 predicateIri,
                 table,
@@ -235,6 +262,7 @@ public final class PathSpecDeriver {
                 nodeKeyType,
                 subjectTemplate.get().prefix,
                 nodeColumns,
+                nodeColumnTypes,
                 Optional.empty()));
     }
 
