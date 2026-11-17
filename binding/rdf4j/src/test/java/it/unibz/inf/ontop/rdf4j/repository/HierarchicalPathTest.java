@@ -10,6 +10,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class HierarchicalPathTest extends AbstractRDF4JTest {
@@ -70,6 +71,41 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
             assertEquals("1", rs.getString(1));
             assertEquals("M1", rs.getString(2));
         }
+    }
+
+    @Test
+    public void perLevelLimitIsAppliedOnlyWhenRequested() throws SQLException {
+        String withLimit = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:perLevelLimit 1 .\n" +
+                "}";
+        String sqlWithLimit = reformulateIntoNativeQuery(withLimit);
+        System.out.println("PER-LEVEL-LIMIT-SQL:\n" + sqlWithLimit);
+        assertTrue("expected a LIMIT on every level:\n" + sqlWithLimit,
+                countOccurrences(sqlWithLimit, "LIMIT 1") >= 2);
+
+        String withoutLimit = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?ancestor WHERE {\n" +
+                "  <http://example.org/ontology#bom_item/2> :parent_bom_item* ?ancestor .\n" +
+                "  <http://example.org/ontology#bom_item/2> path:maxDepth 2 .\n" +
+                "}";
+        String sqlWithoutLimit = reformulateIntoNativeQuery(withoutLimit);
+        assertFalse("no per-level LIMIT should be added by default:\n" + sqlWithoutLimit,
+                sqlWithoutLimit.contains("LIMIT 1"));
+    }
+
+    private static int countOccurrences(String text, String token) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(token, idx)) >= 0) {
+            count++;
+            idx += token.length();
+        }
+        return count;
     }
 
     @Test

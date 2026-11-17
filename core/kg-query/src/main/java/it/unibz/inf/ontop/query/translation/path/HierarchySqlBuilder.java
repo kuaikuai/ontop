@@ -11,6 +11,11 @@ public class HierarchySqlBuilder {
 
     public String build(PathSpec spec, SeedSource seed, int minDepth, int maxDepth,
                         Optional<TraversalFilter> filter) {
+        return build(spec, seed, minDepth, maxDepth, filter, Optional.empty());
+    }
+
+    public String build(PathSpec spec, SeedSource seed, int minDepth, int maxDepth,
+                        Optional<TraversalFilter> filter, Optional<Integer> perLevelLimit) {
         if (!(spec instanceof PathSpec.Self))
             throw new IllegalArgumentException("Phase 1 supports self relations only");
         if (maxDepth < minDepth || minDepth < 1)
@@ -29,6 +34,12 @@ public class HierarchySqlBuilder {
 
         StringBuilder sb = new StringBuilder("WITH\n");
 
+        // Optional safety cap on the number of rows per level (no ordering: truncation
+        // order is up to the database).
+        String layerLimit = perLevelLimit
+                .map(k -> " LIMIT " + k)
+                .orElse("");
+
         sb.append("level_0 AS (\n  SELECT ")
                 .append(self.nodeKeyColumn()).append(" AS node_iri, ")
                 .append(self.parentJoinKeyColumn()).append(" AS next_key, '0' AS depth, ")
@@ -37,6 +48,7 @@ public class HierarchySqlBuilder {
                 .append(extraSelect)
                 .append(" FROM ").append(self.table()).append(" ")
                 .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(self, seed))
+                .append(layerLimit)
                 .append("\n)");
 
         String filterSql = filter.flatMap(TraversalFilter::where)
@@ -53,6 +65,7 @@ public class HierarchySqlBuilder {
                     .append("JOIN level_").append(k - 1)
                     .append(" l ON p.").append(self.joinKeyColumn()).append(" = l.next_key")
                     .append(filterSql)
+                    .append(layerLimit)
                     .append("\n)");
         }
 

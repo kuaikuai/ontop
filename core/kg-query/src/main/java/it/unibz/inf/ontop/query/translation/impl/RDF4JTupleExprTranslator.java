@@ -75,6 +75,7 @@ public class RDF4JTupleExprTranslator {
     private static final String PATH_NS = "http://ontop.org/path#";
     private final Map<String, Integer> pathMaxDepth = new HashMap<>();
     private final Map<String, Integer> pathMinDepth = new HashMap<>();
+    private final Map<String, Integer> pathPerLevelLimit = new HashMap<>();
     private final Map<String, String> pathDepthVariable = new HashMap<>();
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
     private final Map<String, Set<String>> pathVariableId = new HashMap<>();
@@ -401,8 +402,10 @@ public class RDF4JTupleExprTranslator {
                     Optional.empty(), Optional.of(traversalSqlConditions.get(objectName)), false));
         }
         Optional<PathSpec.TraversalFilter> mergedFilter = mergeFilters(spec.traversalFilter(), dynamicFilter);
+        Integer perLevelLimit = startKey == null ? null : pathPerLevelLimit.get(startKey);
         String sql = new HierarchySqlBuilder().build(
-                spec, seed, minDepth, maxDepth, mergedFilter);
+                spec, seed, minDepth, maxDepth, mergedFilter,
+                Optional.ofNullable(perLevelLimit));
         String nodeKeyType = (spec instanceof PathSpec.Self) ? ((PathSpec.Self) spec).nodeKeyType() : null;
         java.util.Collection<String> nodeColumns = (spec instanceof PathSpec.Self)
                 ? ((PathSpec.Self) spec).nodeColumns().values().stream().distinct().collect(java.util.stream.Collectors.toList())
@@ -648,6 +651,9 @@ public class RDF4JTupleExprTranslator {
                     } else if (predicate.equals(PATH_NS + "minDepth")) {
                         Integer value = literalInt(sp.getObjectVar());
                         if (value != null) pathMinDepth.put(subject, value);
+                    } else if (predicate.equals(PATH_NS + "perLevelLimit")) {
+                        Integer value = literalInt(sp.getObjectVar());
+                        if (value != null) pathPerLevelLimit.put(subject, value);
                     } else if (predicate.equals(PATH_NS + "depth")) {
                         String object = sp.getObjectVar().getName();
                         if (object != null) pathDepthVariable.put(subject, object);
