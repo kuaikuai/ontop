@@ -323,11 +323,27 @@ public class MySQLDBFunctionSymbolFactory extends AbstractSQLDBFunctionSymbolFac
      */
     // Cast and regex differ in MySQL version 8 and above vs. previous versions
     private boolean isMySQLVersion5OrBelow() {
-        return databaseInfoSupplier.getDatabaseVersion().isPresent() &&
-                !databaseInfoSupplier.getDatabaseVersion().get().toLowerCase().contains("maria") &&
-                databaseInfoSupplier.getDatabaseVersion()
-                        .map(s -> Integer.parseInt(s.substring(0, s.indexOf("."))))
-                        .filter(s -> s < 8 ).isPresent();
+        // Doris reports an odd/short version string; treat it as MySQL 8+ syntax.
+        if (databaseInfoSupplier.isDoris())
+            return false;
+        return databaseInfoSupplier.getDatabaseVersion()
+                .filter(v -> !v.toLowerCase().contains("maria"))
+                .map(MySQLDBFunctionSymbolFactory::majorVersion)
+                .filter(major -> major >= 0 && major < 8)
+                .isPresent();
+    }
+
+    private static int majorVersion(String version) {
+        if (version == null)
+            return -1;
+        String trimmed = version.trim();
+        int dot = trimmed.indexOf('.');
+        String major = dot >= 0 ? trimmed.substring(0, dot) : trimmed;
+        try {
+            return Integer.parseInt(major);
+        } catch (NumberFormatException e) {
+            return -1;
+        }
     }
 
     @Override

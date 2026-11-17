@@ -26,6 +26,86 @@ public class HierarchicalPathStringTypeTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void requiredAttributesAreMergedBySameSourceMerge() throws SQLException {
+        String q = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT DISTINCT ?n0 ?n1 ?n2 ?n0_p0 ?n0_p1 ?n0_p2 ?n1_p0 ?n1_p1 ?n1_p2 ?n2_p0 ?n2_p1 WHERE {\n" +
+                "  { SELECT DISTINCT ?n0 ?n1 ?n2 ?n0_p0 ?n0_p1 ?n0_p2 ?n1_p0 ?n1_p1 ?n1_p2 ?n2_p0 ?n2_p1 WHERE {\n" +
+                "      ?n0 a :bom_item ;\n" +
+                "          :parent_bom_item+ ?n1 ;\n" +
+                "          :bom_item_id ?v0 ;\n" +
+                "          path:maxDepth 2 .\n" +
+                "      FILTER(?v0 = \"2\")\n" +
+                "      ?n1 :has_component ?n2 ;\n" +
+                "          :bom_version ?v1 .\n" +
+                "      FILTER(?v1 = \"1\")\n" +
+                "      ?n0 :material_code ?n0_p0 ; :bom_code ?n0_p1 ; :unit ?n0_p2 .\n" +
+                "      ?n1 :material_code ?n1_p0 ; :bom_code ?n1_p1 ; :unit ?n1_p2 .\n" +
+                "      ?n2 :material_code ?n2_p0 ; :material_name ?n2_p1 .\n" +
+                "    } LIMIT 200 }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(q);
+        System.out.println("REQUIRED-MERGE-SQL:\n" + sql);
+        System.out.println("BOM_INSTANCES=" + countOccurrences(sql, "PARENT_BOM")
+                + " MATERIAL_INSTANCES=" + countOccurrences(sql, "MATERIAL"));
+        assertFalse("must not be EMPTY:\n" + sql, sql.contains("EMPTY"));
+        // 3 CTE levels + one merged scan for ?n0 + one for ?n1
+        assertTrue("same-source merge should collapse the attribute scans:\n" + sql,
+                countOccurrences(sql, "PARENT_BOM") <= 6);
+    }
+
+    private static int countOccurrences(String text, String token) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = text.indexOf(token, idx)) >= 0) {
+            count++;
+            idx += token.length();
+        }
+        return count;
+    }
+
+    @Test
+    public void innerOptionalOnPathNodeAvoidsJoinBack() throws SQLException {
+        String q = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT DISTINCT ?n0 ?n1 ?n2 ?n1_p0 ?n1_p5 WHERE {\n" +
+                "  { SELECT DISTINCT ?n0 ?n1 ?n2 ?n1_p0 ?n1_p5 WHERE {\n" +
+                "      ?n0 a :bom_item ;\n" +
+                "          :parent_bom_item+ ?n1 ;\n" +
+                "          :bom_item_id ?v0 ;\n" +
+                "          path:maxDepth 2 .\n" +
+                "      FILTER(?v0 = \"2\")\n" +
+                "      ?n1 :has_component ?n2 ;\n" +
+                "          :bom_version ?v1 .\n" +
+                "      FILTER(?v1 = \"1\")\n" +
+                "      OPTIONAL { ?n1 :material_code ?n1_p0 ; :bom_version ?n1_p5 . }\n" +
+                "    } LIMIT 200 }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(q);
+        System.out.println("INNER-OPT-SQL:\n" + sql);
+        int joins = 0;
+        int idx = 0;
+        while ((idx = sql.indexOf("LEFT OUTER JOIN", idx)) >= 0) {
+            joins++;
+            idx += 15;
+        }
+        System.out.println("INNER_OPT_LEFT_JOIN=" + joins);
+        int pathCols = 0;
+        idx = 0;
+        while ((idx = sql.indexOf("path_col_", idx)) >= 0) {
+            pathCols++;
+            idx += 9;
+        }
+        System.out.println("INNER_OPT_PATH_COL=" + pathCols);
+        assertFalse("must not be EMPTY:\n" + sql, sql.contains("EMPTY"));
+        assertFalse("path-node attributes must not be joined back:\n" + sql,
+                sql.toUpperCase().contains("LEFT OUTER JOIN \"PARENT_BOM\""));
+        assertTrue("expected the attributes to come from the path CTE:\n" + sql, pathCols > 0);
+    }
+
+    @Test
     public void mergedOptionalOnPathNode() throws SQLException {
         String q = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +

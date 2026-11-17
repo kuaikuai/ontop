@@ -4,6 +4,8 @@ import com.google.inject.Inject;
 import com.google.inject.Singleton;
 import it.unibz.inf.ontop.dbschema.DatabaseInfoSupplier;
 import it.unibz.inf.ontop.injection.OntopModelSettings;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import java.util.Optional;
@@ -11,11 +13,17 @@ import java.util.Optional;
 @Singleton
 public class DatabaseInfoSupplierImpl implements DatabaseInfoSupplier {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(DatabaseInfoSupplierImpl.class);
+
     private final OntopModelSettings settings;
 
     @Inject
     protected DatabaseInfoSupplierImpl(OntopModelSettings settings) {
         this.settings = settings;
+        String rawDorisFlag = settings.getProperty(OntopModelSettings.INCLUDE_MYSQL_DORIS)
+                .orElse("<unset>");
+        LOGGER.info("Doris compatibility: {}={} -> isDoris={}",
+                OntopModelSettings.INCLUDE_MYSQL_DORIS, rawDorisFlag, isDoris());
     }
 
     @Nullable

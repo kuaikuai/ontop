@@ -223,7 +223,11 @@ public abstract class AbstractDBMetadataProvider implements DBMetadataProvider {
     public void insertIntegrityConstraints(NamedRelationDefinition relation, MetadataLookup metadataLookup) throws MetadataExtractionException {
         try {
             insertPrimaryKey(relation);
-            insertUniqueAttributes(relation);
+            // Doris's getIndexInfo returns a non-numeric ORDINAL_POSITION which makes the
+            // MySQL driver fail while decoding the value. Unique constraints are only used
+            // for optimization, so they can be skipped for Doris.
+            if (!coreSingletons.getDatabaseInfoSupplier().isDoris())
+                insertUniqueAttributes(relation);
             insertForeignKeys(relation, metadataLookup);
         }
         catch (SQLException e) {
