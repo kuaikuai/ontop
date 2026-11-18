@@ -258,6 +258,42 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void optionalsInsideSubselectOnStartKeyProperty() throws SQLException {
+        // Production shape: path + seed filter + attribute OPTIONals all INSIDE the subselect
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 ?n0_p0 ?n0_p1 ?n0_p3 ?n0_p4 ?n0_p5 ?n0_p6 ?n0_p7 ?n0_p8 " +
+                "?n1_p0 ?n1_p1 ?n1_p3 ?n1_p4 ?n1_p5 ?n1_p6 ?n1_p7 ?n1_p8 ?n2 ?n2_p0 WHERE {\n" +
+                "  { SELECT DISTINCT ?n0 ?n1 ?n0_p0 ?n0_p1 ?n0_p3 ?n0_p4 ?n0_p5 ?n0_p6 ?n0_p7 ?n0_p8 " +
+                "?n1_p0 ?n1_p1 ?n1_p3 ?n1_p4 ?n1_p5 ?n1_p6 ?n1_p7 ?n1_p8 ?n2 WHERE {\n" +
+                "      ?n0 a :bom_item .\n" +
+                "      ?n1 a :bom_item .\n" +
+                "      ?n0 :parent_bom_item+ ?n1 .\n" +
+                "      ?n0 path:maxDepth 2 .\n" +
+                "      ?n0 :bom_item_id ?v0 . FILTER(?v0 = 2)\n" +
+                "      ?n1 path:traversalFilter true .\n" +
+                "      ?n1 :bom_version ?v1 . FILTER(?v1 = \"1\")\n" +
+                "      OPTIONAL { ?n0 :material_code ?n0_p0 . }\n" +
+                "      OPTIONAL { ?n0 :bom_item_id ?n0_p1 . }\n" +
+                "      OPTIONAL { ?n0 :parent_material_code ?n0_p3 . }\n" +
+                "      OPTIONAL { ?n0 :bom_version ?n0_p5 . }\n" +
+                "      OPTIONAL { ?n1 :material_code ?n1_p0 . }\n" +
+                "      OPTIONAL { ?n1 :bom_item_id ?n1_p1 . }\n" +
+                "      OPTIONAL { ?n1 :parent_material_code ?n1_p3 . }\n" +
+                "      OPTIONAL { ?n1 :bom_version ?n1_p5 . }\n" +
+                "      ?n1 :material_code ?n1mc .\n" +
+                "      ?n2 a :material .\n" +
+                "      ?n2 :material_code ?n1mc .\n" +
+                "    } LIMIT 1000 }\n" +
+                "  OPTIONAL { ?n2 :material_name ?n2_p0 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("INSIDE-OPT-SQL:\n" + sql);
+        assertTrue("must not be EMPTY:\n" + sql, !sql.contains("EMPTY"));
+    }
+
+    @Test
     public void sameAttributeOnStartAndPathNode() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +

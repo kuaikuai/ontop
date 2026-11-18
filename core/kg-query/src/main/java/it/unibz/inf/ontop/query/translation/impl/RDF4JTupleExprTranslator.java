@@ -21,6 +21,8 @@ import it.unibz.inf.ontop.model.atom.AtomFactory;
 import it.unibz.inf.ontop.model.atom.RDFAtomPredicate;
 import it.unibz.inf.ontop.model.term.*;
 import it.unibz.inf.ontop.model.term.functionsymbol.FunctionSymbolFactory;
+import it.unibz.inf.ontop.model.type.DBTermType;
+import it.unibz.inf.ontop.model.type.DBTypeFactory;
 import it.unibz.inf.ontop.model.type.RDFDatatype;
 import it.unibz.inf.ontop.model.type.TermTypeInference;
 import it.unibz.inf.ontop.model.type.TypeFactory;
@@ -85,6 +87,7 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, QueryModelNode> pathTerminalScopes = new HashMap<>();
     private final Map<String, Boolean> pathTraversalEnabled = new HashMap<>();
     private final Map<String, String> traversalSqlConditions = new HashMap<>();
+    private final Set<String> pathStartNames = new HashSet<>();
     private final Set<ValueExpr> consumedTraversalConditions =
             Collections.newSetFromMap(new IdentityHashMap<>());
 
@@ -387,8 +390,9 @@ public class RDF4JTupleExprTranslator {
         int minDepth = pathMinDepth.getOrDefault(startKey, 1);
         PathSpec spec = specOptional.get();
         SeedSource seed;
+        String seedKey = null;
         if (variableStart) {
-            String seedKey = pathVariableSeed.get(path.getSubjectVar().getName());
+            seedKey = pathVariableSeed.get(path.getSubjectVar().getName());
             if (seedKey == null)
                 return null;
             seed = new SeedSource.Constant(seedKey);
@@ -417,9 +421,20 @@ public class RDF4JTupleExprTranslator {
         Variable startVariable = variableStart
                 ? termFactory.getVariable(path.getSubjectVar().getName())
                 : termFactory.getVariable("path_start");
-        ImmutableMap.Builder<Integer, Variable> argumentMap = ImmutableMap.builder();
+        /*
+         * The seed FILTER has been consumed (see processSeedCondition), so the start must be
+         * pinned here instead: binding path_start_raw to a ground constant makes the start
+         * IRI evaluate to a ground IRI. This reproduces the constant-subject query shape,
+         * which keeps the start-node attribute scans mergeable (same-source merge) and,
+         * unlike the FILTER, does not push the constant down through LEFT JOIN right
+         * children during IQ normalization.
+         */
+        VariableOrGroundTerm startArgument = rawStart;
+        if (seedKey != null)
+            startArgument = termFactory.getDBConstant(seedKey, startKeyType(nodeKeyType));
+        ImmutableMap.Builder<Integer, VariableOrGroundTerm> argumentMap = ImmutableMap.builder();
         argumentMap.put(0, rawNode);
-        argumentMap.put(3, rawStart);
+        argumentMap.put(3, startArgument);
         ImmutableSet.Builder<Variable> projectedVariables = ImmutableSet.builder();
         projectedVariables.add(nodeVariable);
         projectedVariables.add(startVariable);
@@ -475,7 +490,7 @@ public class RDF4JTupleExprTranslator {
         substitutionVariables.add(nodeVariable);
         substitutionTerms.add(iriTerm);
         substitutionVariables.add(startVariable);
-        substitutionTerms.add(termFactory.getIRIFunctionalTerm(template, ImmutableList.of(rawStart)));
+        substitutionTerms.add(termFactory.getIRIFunctionalTerm(template, ImmutableList.of(startArgument)));
         ConstructionNode constructionNode = iqFactory.createConstructionNode(
                 projectedVariables.build(),
                 substitutionFactory.getSubstitution(substitutionVariables.build(), substitutionTerms.build()));
@@ -496,6 +511,24 @@ public class RDF4JTupleExprTranslator {
         return typeFactory.getDatatype(rdfFactory.createIRI(datatypeIri));
     }
 
+    /**
+     * Mirrors PathQuerySupportImpl.toRelation: the type of the start_iri column of the
+     * path relation, derived from the node key type with a fallback to the DB string type.
+     */
+    private DBTermType startKeyType(@Nullable String nodeKeyType) {
+        DBTypeFactory dbTypeFactory = typeFactory.getDBTypeFactory();
+        DBTermType stringType = dbTypeFactory.getDBStringType();
+        if (nodeKeyType != null) {
+            try {
+                DBTermType derived = dbTypeFactory.getDBTermType(nodeKeyType);
+                if (derived != null)
+                    return derived;
+            } catch (RuntimeException ignored) {
+            }
+        }
+        return stringType;
+    }
+
     private void collectTraversalConditions(QueryModelNode node) {
         if (node instanceof Filter) {
             processSeedCondition(((Filter) node).getCondition());
@@ -511,12 +544,35 @@ public class RDF4JTupleExprTranslator {
 
     private void processSeedCondition(ValueExpr condition) {
         for (Map.Entry<String, Set<String>> entry : pathVariableId.entrySet()) {
+            // Only pin (and consume) the filter when the subject is the variable start
+            // of a registered path: the constant is about to be baked into the CTE seed.
+            if (!pathStartNames.contains(entry.getKey()))
+                continue;
             for (String idVariable : entry.getValue()) {
                 String seedValue = constantFor(condition, idVariable);
-                if (seedValue != null) {
-                    pathVariableSeed.put(entry.getKey(), seedValue);
-                    break;
-                }
+                if (seedValue == null)
+                    continue;
+                String existing = pathVariableSeed.get(entry.getKey());
+                if (existing != null && !existing.equals(seedValue))
+                    // Contradictory seed filters: leave them in the tree (old behaviour),
+                    // so that the query semantics is preserved by the FILTER itself.
+                    return;
+                pathVariableSeed.put(entry.getKey(), seedValue);
+                /*
+                 * The constant is now baked into the CTE seed (level_0 WHERE key = c),
+                 * so the FILTER conjunct is redundant: the start node is already pinned
+                 * through path_start_raw (the CTE start_iri column) and the unification
+                 * of the start's IRI template.
+                 *
+                 * It must be consumed: if it stays in the tree, IQ normalization pushes
+                 * its constant down into the start-node OPTIONAL join-backs (LEFT JOIN
+                 * right children), which eliminates their key variables while the lifted
+                 * CONSTRUCTION node still requires them (InvalidIntermediateQueryException
+                 * locally, "does not appear in the columnIDs" in the SQL serializer when
+                 * same-source merging is enabled).
+                 */
+                consumedTraversalConditions.add(condition);
+                break;
             }
         }
     }
@@ -648,6 +704,9 @@ public class RDF4JTupleExprTranslator {
                     .ifPresent(spec -> {
                         pathTerminalSpecs.put(objectName, spec);
                         pathTerminalScopes.put(objectName, enclosingProjection(path));
+                        String startName = path.getSubjectVar().getName();
+                        if (startName != null && path.getSubjectVar().getValue() == null)
+                            pathStartNames.add(startName);
                     });
             return;
         }
