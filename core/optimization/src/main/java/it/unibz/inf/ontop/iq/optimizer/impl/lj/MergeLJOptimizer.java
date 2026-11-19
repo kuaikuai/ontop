@@ -227,10 +227,12 @@ public class MergeLJOptimizer extends AbstractDelegatingIQTreeVariableGeneratorT
 
                 return renaming.builder()
                         .removeFromDomain(leftLJ.leftVariables())
+                        // explicit lambda parameter types: resolves a method-ambiguity
+                        // reported by the Eclipse compiler on the wildcard-captured builder type
                         .transform(
-                                v -> (topRightSpecificVariables.contains(v) ? newTopCondition : newLocalCondition)
+                                (Variable v) -> (topRightSpecificVariables.contains(v) ? newTopCondition : newLocalCondition)
                                         .orElseThrow(() -> new MinorOntopInternalBugException("A lj condition was expected")),
-                                (t, c) -> termFactory.getIfElseNull(c, t))
+                                (Variable t, ImmutableExpression c) -> termFactory.getIfElseNull(c, t))
                         .build();
             }
         }
