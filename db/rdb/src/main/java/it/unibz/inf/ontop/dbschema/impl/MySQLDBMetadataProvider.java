@@ -2,13 +2,18 @@ package it.unibz.inf.ontop.dbschema.impl;
 
 import com.google.inject.assistedinject.Assisted;
 import com.google.inject.assistedinject.AssistedInject;
+import it.unibz.inf.ontop.dbschema.AttributeNotFoundException;
+import it.unibz.inf.ontop.dbschema.MetadataLookup;
+import it.unibz.inf.ontop.dbschema.NamedRelationDefinition;
 import it.unibz.inf.ontop.dbschema.RelationID;
+import it.unibz.inf.ontop.dbschema.UniqueConstraint;
 import it.unibz.inf.ontop.exception.MetadataExtractionException;
 import it.unibz.inf.ontop.injection.CoreSingletons;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
+import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 
@@ -16,9 +21,18 @@ public class MySQLDBMetadataProvider extends DefaultSchemaDBMetadataProvider {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(MySQLDBMetadataProvider.class);
 
+    // Doris value of information_schema.table_options.TABLE_MODEL for UNIQUE-key tables,
+    // which guarantee at-most-one-row-per-key at the model level
+    private static final String DORIS_UNIQUE_MODEL = "UNI";
+
     // True when ontop.mysql.doris=true: Doris JDBC returns extra catalog/schema
     // in getIndexInfo vs getColumns, requiring table-only ID comparison.
     private final boolean isDoris;
+
+    // True when ontop.mysql.doris.uniqueModelKeyConstraints=true: declares the key columns
+    // of Doris UNIQUE-model tables as unique constraints (skipped for other models such as
+    // DUPLICATE, whose key columns do NOT guarantee uniqueness).
+    private final boolean isDorisUniqueModelKeyConstraints;
 
     @AssistedInject
     MySQLDBMetadataProvider(@Assisted Connection connection, CoreSingletons coreSingletons) throws MetadataExtractionException {
@@ -31,9 +45,10 @@ public class MySQLDBMetadataProvider extends DefaultSchemaDBMetadataProvider {
         //        "SELECT DATABASE() AS TABLE_SCHEM");
         // https://dev.mysql.com/doc/refman/5.7/en/information-functions.html#function_schema
         this.isDoris = coreSingletons.getDatabaseInfoSupplier().isDoris();
+        this.isDorisUniqueModelKeyConstraints = coreSingletons.getDatabaseInfoSupplier().isDorisUniqueModelKeyConstraints();
         try {
-            LOGGER.info("MySQL metadata provider: isDoris={}, catalog={}, schema={}",
-                    isDoris, connection.getCatalog(), safeSchema(connection));
+            LOGGER.info("MySQL metadata provider: isDoris={}, uniqueModelKeyConstraints={}, catalog={}, schema={}",
+                    isDoris, isDorisUniqueModelKeyConstraints, connection.getCatalog(), safeSchema(connection));
         } catch (SQLException | RuntimeException e) {
             LOGGER.info("MySQL metadata provider: isDoris={} (catalog/schema unavailable: {})",
                     isDoris, e.getMessage());
@@ -64,6 +79,66 @@ public class MySQLDBMetadataProvider extends DefaultSchemaDBMetadataProvider {
         LOGGER.debug("Doris equalRelationIDs (strict path): extracted={} given={} isDoris={}",
                 extractedId, givenId, isDoris);
         return super.equalRelationIDs(extractedId, givenId);
+    }
+
+    @Override
+    public void insertIntegrityConstraints(NamedRelationDefinition relation, MetadataLookup metadataLookup)
+            throws MetadataExtractionException {
+        super.insertIntegrityConstraints(relation, metadataLookup);
+        if (isDoris && isDorisUniqueModelKeyConstraints)
+            insertDorisUniqueModelKeyConstraint(relation);
+    }
+
+    /**
+     * Declares the key columns of a Doris UNIQUE-model table as a unique constraint.
+     *
+     * Doris does not expose key information through the JDBC primary-key/index APIs, and its
+     * DUPLICATE model does not guarantee key uniqueness. However, the UNIQUE model ("UNI" in
+     * information_schema.table_options) guarantees at-most-one-row-per-key at the model level,
+     * so its TABLE_MODEL_KEY can safely be declared as a unique constraint. This enables
+     * left-join merging for mappings over such tables.
+     */
+    private void insertDorisUniqueModelKeyConstraint(NamedRelationDefinition relation) throws MetadataExtractionException {
+        try {
+            RelationID id = getCanonicalRelationId(relation.getID());
+            // WORKAROUND: for MySQL, the catalog component carries the schema
+            String schema = getRelationCatalog(id);
+            String table = getRelationName(id);
+
+            try (PreparedStatement ps = connection.prepareStatement(
+                    "SELECT TABLE_MODEL, TABLE_MODEL_KEY FROM information_schema.table_options " +
+                            "WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?")) {
+                ps.setString(1, schema);
+                ps.setString(2, table);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (!rs.next())
+                        return;
+                    String model = rs.getString("TABLE_MODEL");
+                    if (!DORIS_UNIQUE_MODEL.equals(model)) {
+                        LOGGER.debug("Doris table {}.{}: model {} does not guarantee key uniqueness, no unique constraint declared",
+                                schema, table, model);
+                        return;
+                    }
+                    String keyColumns = rs.getString("TABLE_MODEL_KEY");
+                    if (keyColumns == null || keyColumns.isEmpty())
+                        return;
+
+                    String name = table + "_DORIS_UNIQUE_MODEL_KEY";
+                    UniqueConstraint.Builder builder = UniqueConstraint.builder(relation, name);
+                    for (String column : keyColumns.split(","))
+                        builder.addDeterminant(rawIdFactory.createAttributeID(column.trim()));
+                    builder.build();
+                    LOGGER.info("Doris UNIQUE-model table {}.{}: declared {} as unique constraint (model-level key)",
+                            schema, table, keyColumns);
+                }
+            }
+        }
+        catch (AttributeNotFoundException e) {
+            throw new MetadataExtractionException("Doris UNIQUE-model key column not found in " + relation.getID() + ": " + e.getAttributeID());
+        }
+        catch (SQLException e) {
+            throw new MetadataExtractionException(e);
+        }
     }
 
 

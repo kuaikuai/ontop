@@ -49,4 +49,11 @@ public class DatabaseInfoSupplierImpl implements DatabaseInfoSupplier {
                 .map(Boolean::parseBoolean)
                 .orElse(false);
     }
+
+    @Override
+    public boolean isDorisUniqueModelKeyConstraints() {
+        return settings.getProperty(OntopModelSettings.DORIS_UNIQUE_MODEL_KEY_CONSTRAINTS)
+                .map(Boolean::parseBoolean)
+                .orElse(false);
+    }
 }

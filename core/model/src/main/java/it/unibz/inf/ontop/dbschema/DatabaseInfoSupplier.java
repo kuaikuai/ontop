@@ -22,4 +22,14 @@ public interface DatabaseInfoSupplier {
     default boolean isDoris() {
         return false;
     }
+
+    /**
+     * Doris UNIQUE-model key columns as unique constraints flag.
+     * When true (together with isDoris()), the key columns of Doris UNIQUE-model tables
+     * are declared as unique constraints during metadata extraction.
+     * Default is false.
+     */
+    default boolean isDorisUniqueModelKeyConstraints() {
+        return false;
+    }
 }

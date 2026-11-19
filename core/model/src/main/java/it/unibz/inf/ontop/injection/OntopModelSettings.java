@@ -61,4 +61,12 @@ public interface OntopModelSettings {
     String TYPE_REASONING_MODE = "ontop.reasoning.type";
 
     String INCLUDE_MYSQL_DORIS = "ontop.mysql.doris";
+
+    /**
+     * When true (and ontop.mysql.doris=true), the key columns of Doris UNIQUE-model tables
+     * (from information_schema.table_options.TABLE_MODEL_KEY) are declared as unique constraints.
+     * UNIQUE-model tables guarantee key uniqueness at the model level, so this enables
+     * left-join merging without a user-supplied constraint file.
+     */
+    String DORIS_UNIQUE_MODEL_KEY_CONSTRAINTS = "ontop.mysql.doris.uniqueModelKeyConstraints";
 }
