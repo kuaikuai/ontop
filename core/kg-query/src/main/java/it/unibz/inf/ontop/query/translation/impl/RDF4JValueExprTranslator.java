@@ -21,9 +21,12 @@ import org.apache.commons.rdf.api.RDF;
 import org.eclipse.rdf4j.model.Value;
 import org.eclipse.rdf4j.query.algebra.*;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.function.UnaryOperator;
@@ -304,15 +307,60 @@ public class RDF4JValueExprTranslator {
                 throw new MinorOntopInternalBugException("Was not expecting a ListMemberOperator from RDF4J with less than 2 terms");
 
             ImmutableTerm firstArgument = extendedTerms.get(0).get();
-            ImmutableTerm orTerm = extendedTerms.stream()
+            ImmutableTerm orTerm = getBalancedDisjunction(extendedTerms.stream()
                     .map(ExistsMapAnnotatedObject::get)
                     .skip(1)
                     .map(t -> getFunctionalTerm(SPARQL.EQ, firstArgument, t))
-                    .reduce((e1, e2) -> getFunctionalTerm(SPARQL.LOGICAL_OR, e1, e2))
-                    .orElseThrow(() -> new MinorOntopInternalBugException("Cannot happen because there are at least 2 terms"));
+                    .collect(ImmutableCollectors.toList()));
             return ExistsMapAnnotatedObject.of(extendedTerms, terms -> orTerm);
         }
         throw new RuntimeException("Unreachable: all subclasses covered");
+    }
+
+    /**
+     * Folds a non-empty list of terms into a binary SPARQL disjunction by building a
+     * <em>balanced</em> tree rather than a left-deep one.
+     *
+     * <p>The number of binary {@code LOGICAL_OR} nodes is unchanged (n - 1), but the depth of the
+     * resulting term is O(log n) instead of O(n). This matters because the term is traversed
+     * recursively by {@code simplify()} / {@code toString()} / {@code hashCode()}: with hundreds
+     * of elements in an {@code IN} list, a left-deep tree overflows the JVM stack.
+     *
+     * <p>The in-order sequence of leaves is preserved (each round only pairs adjacent terms), so
+     * the flattened {@code DB_OR} produced downstream is identical to the one obtained from a
+     * left-deep tree.
+     */
+    private ImmutableTerm getBalancedDisjunction(ImmutableList<? extends ImmutableTerm> terms) {
+        return RDF4JValueExprTranslator.<ImmutableTerm>balancedFold(terms,
+                (t1, t2) -> getFunctionalTerm(SPARQL.LOGICAL_OR, t1, t2));
+    }
+
+    /**
+     * Folds a non-empty list into a <em>balanced</em> binary tree by pairing adjacent elements at
+     * each round (instead of folding left, which gives a left-deep tree of depth {@code n - 1}).
+     *
+     * <p>The number of applications of {@code combiner} is unchanged ({@code n - 1}), but the depth
+     * of the resulting structure is {@code ceil(log2(n))} instead of {@code n - 1}. The in-order
+     * sequence of the items is preserved.
+     *
+     * <p>Package-private so that it can be unit-tested without building an Ontop injector.
+     *
+     * @param items    non-empty list of items
+     * @param combiner binary operation
+     * @return the single combined item
+     */
+    static <T> T balancedFold(ImmutableList<? extends T> items, BiFunction<T, T, T> combiner) {
+        List<T> level = new ArrayList<>(items);
+        while (level.size() > 1) {
+            List<T> nextLevel = new ArrayList<>((level.size() + 1) / 2);
+            for (int i = 0; i < level.size(); i += 2) {
+                nextLevel.add(i + 1 < level.size()
+                        ? combiner.apply(level.get(i), level.get(i + 1))
+                        : level.get(i));
+            }
+            level = nextLevel;
+        }
+        return level.get(0);
     }
 
     private ImmutableFunctionalTerm getFunctionalTerm(String functionName) {
