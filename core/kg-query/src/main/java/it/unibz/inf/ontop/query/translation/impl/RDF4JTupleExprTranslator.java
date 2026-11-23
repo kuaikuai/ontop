@@ -81,7 +81,8 @@ public class RDF4JTupleExprTranslator {
     private final Map<String, String> pathDepthVariable = new HashMap<>();
     private final Map<String, String> pathPredecessorVariable = new HashMap<>();
     private final Map<String, Set<String>> pathVariableId = new HashMap<>();
-    private final Map<String, String> pathVariableSeed = new HashMap<>();
+    private final Map<String, List<String>> pathVariableSeed = new HashMap<>();
+    private final Map<String, String> pathVariableSeedId = new HashMap<>();
     private final Map<String, PathSpec> pathTerminalSpecs = new HashMap<>();
     private final Map<String, Set<String>> sinkPropertyVariables = new HashMap<>();
     private final Map<String, QueryModelNode> pathTerminalScopes = new HashMap<>();
@@ -390,12 +391,14 @@ public class RDF4JTupleExprTranslator {
         int minDepth = pathMinDepth.getOrDefault(startKey, 1);
         PathSpec spec = specOptional.get();
         SeedSource seed;
-        String seedKey = null;
+        List<String> seedKeys = null;
         if (variableStart) {
-            seedKey = pathVariableSeed.get(path.getSubjectVar().getName());
-            if (seedKey == null)
+            seedKeys = pathVariableSeed.get(path.getSubjectVar().getName());
+            if (seedKeys == null || seedKeys.isEmpty())
                 return null;
-            seed = new SeedSource.Constant(seedKey);
+            seed = seedKeys.size() == 1
+                    ? new SeedSource.Constant(seedKeys.get(0))
+                    : new SeedSource.Values(ImmutableList.copyOf(seedKeys));
         } else {
             seed = new SeedSource.Constant(path.getSubjectVar().getValue().stringValue());
         }
@@ -428,10 +431,15 @@ public class RDF4JTupleExprTranslator {
          * which keeps the start-node attribute scans mergeable (same-source merge) and,
          * unlike the FILTER, does not push the constant down through LEFT JOIN right
          * children during IQ normalization.
+         *
+         * With multiple seed values (IN) there is no single ground constant: the start
+         * stays a variable and the CTE start_iri column (level_0) carries the per-row
+         * seed identity, exactly like the constant-subject shape. Merging start-node
+         * attribute scans then relies on the start key variable, not on a ground constant.
          */
         VariableOrGroundTerm startArgument = rawStart;
-        if (seedKey != null)
-            startArgument = termFactory.getDBConstant(seedKey, startKeyType(nodeKeyType));
+        if (seedKeys != null && seedKeys.size() == 1)
+            startArgument = termFactory.getDBConstant(seedKeys.get(0), startKeyType(nodeKeyType));
         ImmutableMap.Builder<Integer, VariableOrGroundTerm> argumentMap = ImmutableMap.builder();
         argumentMap.put(0, rawNode);
         argumentMap.put(3, startArgument);
@@ -545,24 +553,33 @@ public class RDF4JTupleExprTranslator {
     private void processSeedCondition(ValueExpr condition) {
         for (Map.Entry<String, Set<String>> entry : pathVariableId.entrySet()) {
             // Only pin (and consume) the filter when the subject is the variable start
-            // of a registered path: the constant is about to be baked into the CTE seed.
+            // of a registered path: the constants are about to be baked into the CTE seed.
             if (!pathStartNames.contains(entry.getKey()))
                 continue;
             for (String idVariable : entry.getValue()) {
-                String seedValue = constantFor(condition, idVariable);
-                if (seedValue == null)
+                List<String> seedValues = seedValuesFor(condition, idVariable);
+                if (seedValues == null)
                     continue;
-                String existing = pathVariableSeed.get(entry.getKey());
-                if (existing != null && !existing.equals(seedValue))
+                String existingVariable = pathVariableSeedId.get(entry.getKey());
+                List<String> existing = pathVariableSeed.get(entry.getKey());
+                if (existing != null && !idVariable.equals(existingVariable))
+                    // The seed was already pinned through another id variable (e.g. a
+                    // second attribute of the start row): leave this filter in the tree
+                    // (old behaviour), so that the attribute constraint is preserved by
+                    // the FILTER itself and the other channel keeps its own semantics.
+                    return;
+                List<String> merged = existing == null ? seedValues : intersection(existing, seedValues);
+                if (merged.isEmpty())
                     // Contradictory seed filters: leave them in the tree (old behaviour),
                     // so that the query semantics is preserved by the FILTER itself.
                     return;
-                pathVariableSeed.put(entry.getKey(), seedValue);
+                pathVariableSeed.put(entry.getKey(), merged);
+                pathVariableSeedId.put(entry.getKey(), idVariable);
                 /*
-                 * The constant is now baked into the CTE seed (level_0 WHERE key = c),
-                 * so the FILTER conjunct is redundant: the start node is already pinned
-                 * through path_start_raw (the CTE start_iri column) and the unification
-                 * of the start's IRI template.
+                 * The constants are now baked into the CTE seed (level_0 WHERE key = c
+                 * or key IN (c1, ..., cn)), so the FILTER is redundant: the start node is
+                 * already pinned through path_start_raw (the CTE start_iri column) and the
+                 * unification of the start's IRI template.
                  *
                  * It must be consumed: if it stays in the tree, IQ normalization pushes
                  * its constant down into the start-node OPTIONAL join-backs (LEFT JOIN
@@ -570,6 +587,10 @@ public class RDF4JTupleExprTranslator {
                  * CONSTRUCTION node still requires them (InvalidIntermediateQueryException
                  * locally, "does not appear in the columnIDs" in the SQL serializer when
                  * same-source merging is enabled).
+                 *
+                 * The whole condition is therefore consumed, so only fully bakeable
+                 * conditions qualify: seedValuesFor returns null when any part of the
+                 * condition constrains something else (different variable, NE, ...).
                  */
                 consumedTraversalConditions.add(condition);
                 break;
@@ -577,27 +598,87 @@ public class RDF4JTupleExprTranslator {
         }
     }
 
-    private String constantFor(ValueExpr condition, String variableName) {
+    /**
+     * Extracts the set of constant values the condition forces on the given id
+     * variable, or null when the condition is not fully bakeable into the CTE seed.
+     *
+     * Supported shapes: Compare(EQ) / SameTerm against a constant, ListMemberOperator
+     * (SPARQL IN) with constant members, and Or / And combinations of those (union /
+     * intersection respectively). Anything else (different variable, NE, non-constant
+     * member, ...) makes the whole condition not bakeable: consumption happens at the
+     * FILTER granularity, so no part of a condition can be consumed selectively.
+     */
+    private List<String> seedValuesFor(ValueExpr condition, String variableName) {
+        LinkedHashSet<String> values = new LinkedHashSet<>();
+        if (!collectSeedValues(condition, variableName, values) || values.isEmpty())
+            return null;
+        return new ArrayList<>(values);
+    }
+
+    private boolean collectSeedValues(ValueExpr condition, String variableName, Set<String> values) {
         if (condition instanceof Compare) {
             Compare compare = (Compare) condition;
             if (compare.getOperator() != Compare.CompareOp.EQ)
-                return null;
-            String value = constantForEquality(compare.getLeftArg(), compare.getRightArg(), variableName);
-            return value != null ? value : constantForEquality(compare.getRightArg(), compare.getLeftArg(), variableName);
+                return false;
+            return collectSeedValuesFromEquality(compare.getLeftArg(), compare.getRightArg(), variableName, values)
+                    || collectSeedValuesFromEquality(compare.getRightArg(), compare.getLeftArg(), variableName, values);
         }
         if (condition instanceof SameTerm) {
             SameTerm sameTerm = (SameTerm) condition;
-            String value = constantForEquality(sameTerm.getLeftArg(), sameTerm.getRightArg(), variableName);
-            return value != null ? value : constantForEquality(sameTerm.getRightArg(), sameTerm.getLeftArg(), variableName);
+            return collectSeedValuesFromEquality(sameTerm.getLeftArg(), sameTerm.getRightArg(), variableName, values)
+                    || collectSeedValuesFromEquality(sameTerm.getRightArg(), sameTerm.getLeftArg(), variableName, values);
         }
-        return null;
+        if (condition instanceof ListMemberOperator) {
+            // SPARQL ?x IN (c1, ..., cn): the tested expression is the first argument,
+            // all members must be constants.
+            List<ValueExpr> arguments = ((ListMemberOperator) condition).getArguments();
+            if (arguments.size() < 2)
+                return false;
+            if (!(arguments.get(0) instanceof Var)
+                    || !((Var) arguments.get(0)).getName().equals(variableName))
+                return false;
+            for (int i = 1; i < arguments.size(); i++) {
+                if (!(arguments.get(i) instanceof ValueConstant))
+                    return false;
+                values.add(valueKey(((ValueConstant) arguments.get(i)).getValue()));
+            }
+            return true;
+        }
+        if (condition instanceof Or) {
+            // v = a OR v = b  <=>  v IN {a, b}: union of the arms.
+            Or or = (Or) condition;
+            return collectSeedValues(or.getLeftArg(), variableName, values)
+                    && collectSeedValues(or.getRightArg(), variableName, values);
+        }
+        if (condition instanceof And) {
+            // v IN (a, b) && v = a  <=>  v = a: intersection of the arms.
+            And and = (And) condition;
+            Set<String> left = new LinkedHashSet<>();
+            Set<String> right = new LinkedHashSet<>();
+            if (!collectSeedValues(and.getLeftArg(), variableName, left)
+                    || !collectSeedValues(and.getRightArg(), variableName, right))
+                return false;
+            left.retainAll(right);
+            values.addAll(left);
+            return true;
+        }
+        return false;
     }
 
-    private String constantForEquality(ValueExpr variableSide, ValueExpr constantSide, String variableName) {
+    private boolean collectSeedValuesFromEquality(ValueExpr variableSide, ValueExpr constantSide,
+                                                  String variableName, Set<String> values) {
         if (variableSide instanceof Var && ((Var) variableSide).getName().equals(variableName)
-                && constantSide instanceof ValueConstant)
-            return valueKey(((ValueConstant) constantSide).getValue());
-        return null;
+                && constantSide instanceof ValueConstant) {
+            values.add(valueKey(((ValueConstant) constantSide).getValue()));
+            return true;
+        }
+        return false;
+    }
+
+    private List<String> intersection(List<String> existing, List<String> seedValues) {
+        LinkedHashSet<String> result = new LinkedHashSet<>(existing);
+        result.retainAll(new LinkedHashSet<>(seedValues));
+        return new ArrayList<>(result);
     }
 
     private String valueKey(Value value) {

@@ -356,6 +356,209 @@ public class HierarchicalPathTest extends AbstractRDF4JTest {
     }
 
     @Test
+    public void variableStartSeededByInListTraversesFromEverySeed() throws SQLException {
+        // items 2 and 3 both have parent material M1 -> item 1 is their only ancestor
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid IN (2, 3))\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("IN-SEED-SQL:\n" + sql);
+
+        assertTrue("expected the seed list to be rendered as IN:\n" + sql,
+                sql.contains("IN (2, 3)"));
+
+        java.util.Set<String> rows = new java.util.TreeSet<>();
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            while (rs.next())
+                rows.add(rs.getString(1) + " -> " + rs.getString(2));
+        }
+        java.util.Set<String> expected = new java.util.TreeSet<>();
+        expected.add("2 -> 1");
+        expected.add("3 -> 1");
+        assertEquals("expected one ancestor row per seed:\n" + sql, expected, rows);
+    }
+
+    @Test
+    public void variableStartSeededByOrOfEqualities() throws SQLException {
+        // FILTER(?x = a || ?x = b) must be recognised as the same seed set as IN (a, b)
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid = 2 || ?bid = 3)\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("OR-SEED-SQL:\n" + sql);
+
+        assertTrue("expected the Or seed to be rendered as IN:\n" + sql,
+                sql.contains("IN (2, 3)"));
+
+        java.util.Set<String> rows = new java.util.TreeSet<>();
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            while (rs.next())
+                rows.add(rs.getString(1) + " -> " + rs.getString(2));
+        }
+        java.util.Set<String> expected = new java.util.TreeSet<>();
+        expected.add("2 -> 1");
+        expected.add("3 -> 1");
+        assertEquals(expected, rows);
+    }
+
+    @Test
+    public void singleValueInListKeepsTheConstantPin() throws SQLException {
+        // Backward compatibility: a single seed value keeps the ground-constant start
+        // (path_start_raw pin), so it must NOT be rendered as an IN list.
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid IN (2))\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("SINGLE-IN-SQL:\n" + sql);
+
+        assertTrue("expected the single seed to stay a constant pin:\n" + sql,
+                sql.contains("= 2"));
+        assertFalse("a single seed value must not be rendered as IN:\n" + sql,
+                sql.contains("IN ("));
+
+        // The start is pinned to a ground constant, so it is not projected by the
+        // raw target SQL: the remaining column is the ancestor (item 1).
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals("1", rs.getString(1));
+            assertFalse(rs.next());
+        }
+    }
+
+    @Test
+    public void andOfInAndEqualityIntersectsTheSeeds() throws SQLException {
+        // FILTER(?x IN (a, b) && ?x = b) is the single seed b
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid IN (2, 3) && ?bid = 3)\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("AND-IN-SQL:\n" + sql);
+
+        assertTrue("expected the intersection to be pinned as a single constant:\n" + sql,
+                sql.contains("= 3"));
+
+        // The pin drops the start from the raw target SQL: the ancestor is item 1.
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals("1", rs.getString(1));
+            assertFalse(rs.next());
+        }
+    }
+
+    @Test
+    public void separateInAndEqualityFiltersIntersectTheSeeds() throws SQLException {
+        // Two independent FILTER statements on the same id variable are intersected
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?bid .\n" +
+                "  FILTER(?bid IN (2, 3))\n" +
+                "  FILTER(?bid = 2)\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("SEP-IN-SQL:\n" + sql);
+
+        assertTrue("expected the intersection to be pinned as a single constant:\n" + sql,
+                sql.contains("= 2"));
+
+        // The pin drops the start from the raw target SQL: the ancestor is item 1.
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            assertTrue(rs.next());
+            assertEquals("1", rs.getString(1));
+            assertFalse(rs.next());
+        }
+    }
+
+    @Test
+    public void optionalStartAttributesWithInSeeds() throws SQLException {
+        // Multi-seed queries have no ground start constant: the start-node attribute
+        // join-backs must bind through the start key variable (LEFT JOIN join with
+        // start_iri) instead of the pin, and must not be optimised to EMPTY.
+        String query = "PREFIX : <http://example.org/ontology#>\n" +
+                "PREFIX path: <http://ontop.org/path#>\n" +
+                "SELECT ?n0 ?n1 ?n0_p0 ?n1_p0 WHERE {\n" +
+                "  ?n0 a :bom_item .\n" +
+                "  ?n1 a :bom_item .\n" +
+                "  ?n0 :parent_bom_item+ ?n1 .\n" +
+                "  ?n0 path:maxDepth 2 .\n" +
+                "  ?n0 :bom_item_id ?v0 . FILTER(?v0 IN (2, 3))\n" +
+                "  OPTIONAL { ?n0 :material_code ?n0_p0 . }\n" +
+                "  OPTIONAL { ?n1 :material_code ?n1_p0 . }\n" +
+                "}";
+
+        String sql = reformulateIntoNativeQuery(query);
+        System.out.println("OPT-IN-SQL:\n" + sql);
+        assertTrue("must not be optimised to EMPTY:\n" + sql, !sql.contains("EMPTY"));
+
+        // The raw target SQL does not project the SPARQL variables one-to-one (the
+        // IRI template columns are decomposed), so assert on the value domain: every
+        // row must carry the ancestor material M1 plus the material of one of the
+        // seeds (M2 for item 2, M3 for item 3), and both seeds must occur.
+        java.util.Set<String> startMaterials = new java.util.TreeSet<>();
+        int rowCount = 0;
+        try (ResultSet rs = getSQLConnection().createStatement().executeQuery(sql)) {
+            java.sql.ResultSetMetaData md = rs.getMetaData();
+            while (rs.next()) {
+                rowCount++;
+                java.util.Set<String> rowValues = new java.util.TreeSet<>();
+                for (int i = 1; i <= md.getColumnCount(); i++) {
+                    String value = rs.getString(i);
+                    if (value != null)
+                        rowValues.add(value);
+                }
+                assertTrue("every row must contain the ancestor material M1:\n" + sql,
+                        rowValues.contains("M1"));
+                assertTrue("every row must contain exactly one seed material (M2 or M3):\n" + sql,
+                        rowValues.contains("M2") != rowValues.contains("M3"));
+                if (rowValues.contains("M2"))
+                    startMaterials.add("M2");
+                if (rowValues.contains("M3"))
+                    startMaterials.add("M3");
+            }
+        }
+        assertTrue("expected at least one row per seed:\n" + sql, rowCount >= 2);
+        assertEquals("expected both seeds to contribute rows:\n" + sql,
+                new java.util.TreeSet<>(java.util.Arrays.asList("M2", "M3")), startMaterials);
+    }
+
+    @Test
     public void pathNodeJoinsAnotherRelation() throws SQLException {
         String query = "PREFIX : <http://example.org/ontology#>\n" +
                 "PREFIX path: <http://ontop.org/path#>\n" +

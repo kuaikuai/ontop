@@ -9,6 +9,12 @@ import java.util.stream.Collectors;
 
 public class HierarchySqlBuilder {
 
+    /**
+     * Hard cap on the number of IN seed values: rendered inline into level_0, so
+     * the SQL must stay within the target engine limits (and remain readable).
+     */
+    public static final int MAX_SEED_VALUES = 1000;
+
     public String build(PathSpec spec, SeedSource seed, int minDepth, int maxDepth,
                         Optional<TraversalFilter> filter) {
         return build(spec, seed, minDepth, maxDepth, filter, Optional.empty());
@@ -47,7 +53,7 @@ public class HierarchySqlBuilder {
                 .append(self.nodeKeyColumn()).append(" AS start_iri")
                 .append(extraSelect)
                 .append(" FROM ").append(self.table()).append(" ")
-                .append("WHERE ").append(self.nodeKeyColumn()).append(" = ").append(nodeKeyLiteral(self, seed))
+                .append("WHERE ").append(self.nodeKeyColumn()).append(" ").append(nodeKeyPredicate(self, seed))
                 .append(layerLimit)
                 .append("\n)");
 
@@ -79,10 +85,24 @@ public class HierarchySqlBuilder {
         return sb.toString();
     }
 
-    private String nodeKeyLiteral(PathSpec.Self self, SeedSource seed) {
-        if (!(seed instanceof SeedSource.Constant))
-            throw new IllegalArgumentException("Phase 1 supports constant seed only");
-        String iri = ((SeedSource.Constant) seed).iri();
+    private String nodeKeyPredicate(PathSpec.Self self, SeedSource seed) {
+        if (seed instanceof SeedSource.Constant)
+            return "= " + nodeKeyLiteral(self, ((SeedSource.Constant) seed).iri());
+        if (seed instanceof SeedSource.Values) {
+            List<String> keys = ((SeedSource.Values) seed).iris().stream()
+                    .map(iri -> nodeKeyLiteral(self, iri))
+                    .collect(Collectors.toList());
+            if (keys.isEmpty())
+                throw new IllegalArgumentException("IN seed list must not be empty");
+            if (keys.size() > MAX_SEED_VALUES)
+                throw new IllegalArgumentException("too many IN seed values (" + keys.size()
+                        + " > " + MAX_SEED_VALUES + "); split the query into batches");
+            return "IN (" + String.join(", ", keys) + ")";
+        }
+        throw new IllegalArgumentException("Phase 1 supports constant and IN-list seeds only");
+    }
+
+    private String nodeKeyLiteral(PathSpec.Self self, String iri) {
         String key = iri.substring(iri.lastIndexOf('/') + 1);
         return isNumericType(self.nodeKeyType())
                 ? key
